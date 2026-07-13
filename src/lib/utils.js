@@ -141,3 +141,16 @@ export const PAYMENT_METHOD_LABELS = {
   UPI: 'UPI',
   NET_BANKING: 'Net Banking',
 }
+
+/**
+ * Safely parse a Firestore date field (which could be a Timestamp, Date object, string, or number)
+ */
+export function parseFirestoreDate(dateField) {
+  if (!dateField) return null
+  if (typeof dateField.toDate === 'function') {
+    return dateField.toDate()
+  }
+  const date = new Date(dateField)
+  return isNaN(date.getTime()) ? null : date
+}
+

@@ -6,6 +6,7 @@ import { db } from '@/lib/firebase/admin'
 import { transactionSchema } from '@/lib/validations'
 import { sendBudgetExceededEmail, sendLargeExpenseEmail } from '@/lib/resend'
 import { startOfMonth, endOfMonth } from 'date-fns'
+import { parseFirestoreDate } from '@/lib/utils'
 
 // ─── GET /api/transactions ─────────────────────────────────────────────────────
 export async function GET(request) {
@@ -34,9 +35,9 @@ export async function GET(request) {
       return {
         id: doc.id,
         ...data,
-        date: data.date ? data.date.toDate().toISOString() : null,
-        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
-        updatedAt: data.updatedAt ? data.updatedAt.toDate().toISOString() : null,
+        date: parseFirestoreDate(data.date)?.toISOString() || null,
+        createdAt: parseFirestoreDate(data.createdAt)?.toISOString() || null,
+        updatedAt: parseFirestoreDate(data.updatedAt)?.toISOString() || null,
       }
     })
 

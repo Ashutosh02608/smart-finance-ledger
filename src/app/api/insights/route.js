@@ -6,6 +6,7 @@ import { db } from '@/lib/firebase/admin'
 import { calculateHealthScore } from '@/lib/health-score'
 import { calculatePredictions, generateInsights } from '@/lib/predictions'
 import { startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns'
+import { parseFirestoreDate } from '@/lib/utils'
 
 export async function GET(request) {
   try {
@@ -27,7 +28,7 @@ export async function GET(request) {
       return {
         id: doc.id,
         ...data,
-        date: data.date ? data.date.toDate() : null,
+        date: parseFirestoreDate(data.date),
       }
     }).filter(tx => tx.date !== null)
 
@@ -47,10 +48,10 @@ export async function GET(request) {
       }
     })
 
-    // Enrich budgets with in-memory spent info
+    // Enrich budgets with in-memory spent info safely
     const budgetsWithSpent = budgetsSnapshot.docs
       .filter(doc => {
-        const mVal = doc.data().month ? doc.data().month.toDate() : null
+        const mVal = parseFirestoreDate(doc.data().month)
         return mVal && mVal >= monthStart && mVal <= monthEnd
       })
       .map(doc => {
@@ -59,11 +60,11 @@ export async function GET(request) {
         return {
           id: doc.id,
           category: data.category,
-        limit: data.limit,
-        month: data.month ? data.month.toDate().toISOString() : null,
-        spent,
-      }
-    })
+          limit: data.limit,
+          month: parseFirestoreDate(data.month)?.toISOString() || null,
+          spent,
+        }
+      })
 
     // All-time net savings
     let allTimeIncome = 0

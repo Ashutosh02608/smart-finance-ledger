@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
 import { db } from '@/lib/firebase/admin'
 import { startOfMonth, endOfMonth } from 'date-fns'
+import { parseFirestoreDate } from '@/lib/utils'
 
 // ─── GET /api/dashboard ────────────────────────────────────────────────────────
 // Returns all data needed for dashboard in a single aggregated request
@@ -34,13 +35,13 @@ export async function GET(request) {
     const userData = { id: userDoc.id, ...userDoc.data() }
     const unreadNotifications = notifsSnapshot.size
 
-    // Parse all transactions
+    // Parse all transactions safely
     const allTransactions = txsSnapshot.docs.map(doc => {
       const data = doc.data()
       return {
         id: doc.id,
         ...data,
-        date: data.date ? data.date.toDate() : null,
+        date: parseFirestoreDate(data.date),
       }
     })
 
@@ -80,10 +81,10 @@ export async function GET(request) {
       }
     })
 
-    // Enrich budgets
+    // Enrich budgets safely
     const enrichedBudgets = budgetsSnapshot.docs
       .filter(doc => {
-        const mVal = doc.data().month ? doc.data().month.toDate() : null
+        const mVal = parseFirestoreDate(doc.data().month)
         return mVal && mVal >= monthStart && mVal <= monthEnd
       })
       .map(doc => {
@@ -93,13 +94,13 @@ export async function GET(request) {
           id: doc.id,
           category: data.category,
           limit: data.limit,
-        month: data.month ? data.month.toDate().toISOString() : null,
-        spent: spentAmount,
-        remaining: data.limit - spentAmount,
-        percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
-        isExceeded: spentAmount > data.limit,
-      }
-    })
+          month: parseFirestoreDate(data.month)?.toISOString() || null,
+          spent: spentAmount,
+          remaining: data.limit - spentAmount,
+          percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
+          isExceeded: spentAmount > data.limit,
+        }
+      })
 
     return NextResponse.json({
       user: userData,

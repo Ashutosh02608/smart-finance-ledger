@@ -3,6 +3,8 @@ export const dynamic = 'force-dynamic'
 import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
 import { db } from '@/lib/firebase/admin'
+import { parseFirestoreDate } from '@/lib/utils'
+
 
 // ─── GET /api/notifications ──────────────────────────────────────────────────
 export async function GET(request) {
@@ -26,7 +28,7 @@ export async function GET(request) {
       return {
         id: doc.id,
         ...data,
-        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+        createdAt: parseFirestoreDate(data.createdAt)?.toISOString() || null,
       }
     })
 

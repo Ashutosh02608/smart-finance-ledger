@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
 import { db } from '@/lib/firebase/admin'
 import { startOfMonth, endOfMonth, subMonths, format, isWithinInterval } from 'date-fns'
+import { parseFirestoreDate } from '@/lib/utils'
 
 // ─── GET /api/analytics ────────────────────────────────────────────────────────
 // Returns chart data for the last N months
@@ -27,7 +28,7 @@ export async function GET(request) {
       return {
         id: doc.id,
         ...data,
-        date: data.date ? data.date.toDate() : null,
+        date: parseFirestoreDate(data.date),
       }
     }).filter(tx => tx.date !== null)
 

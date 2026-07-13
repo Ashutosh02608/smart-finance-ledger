@@ -28,6 +28,7 @@ export default function DashboardPage() {
   const [analytics, setAnalytics] = useState(null)
   const [loading, setLoading] = useState(true)
   const [txModalOpen, setTxModalOpen] = useState(false)
+  const [greeting, setGreeting] = useState('day')
 
   const fetchData = async () => {
     try {
@@ -46,7 +47,13 @@ export default function DashboardPage() {
     }
   }
 
-  useEffect(() => { fetchData() }, [])
+  useEffect(() => {
+    fetchData()
+    const h = new Date().getHours()
+    if (h < 12) setGreeting('morning')
+    else if (h < 17) setGreeting('afternoon')
+    else setGreeting('evening')
+  }, [])
 
   const stats = dash?.stats || {}
   const currency = dash?.user?.currency || 'INR'
@@ -58,7 +65,7 @@ export default function DashboardPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-[var(--text-primary)]">
-              Good {getGreeting()}, {dash?.user?.name?.split(' ')[0] || 'there'} 👋
+              Good {greeting}, {dash?.user?.name?.split(' ')[0] || 'there'} 👋
             </h1>
             <p className="text-sm text-[var(--text-secondary)] mt-1">
               Here's your financial overview for {new Date().toLocaleString('en-IN', { month: 'long', year: 'numeric' })}
@@ -253,9 +260,4 @@ function RecentTransactionRow({ tx, currency }) {
   )
 }
 
-function getGreeting() {
-  const h = new Date().getHours()
-  if (h < 12) return 'morning'
-  if (h < 17) return 'afternoon'
-  return 'evening'
-}
+
