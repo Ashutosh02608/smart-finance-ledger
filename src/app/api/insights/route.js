@@ -16,14 +16,10 @@ export async function GET(request) {
     const monthStart = startOfMonth(now)
     const monthEnd = endOfMonth(now)
 
-    // Parallel fetch: all user transactions and this month's budgets
+    // Parallel fetch: all user transactions and budgets
     const [txsSnapshot, budgetsSnapshot] = await Promise.all([
       db.collection('transactions').where('userId', '==', user.id).get(),
-      db.collection('budgets')
-        .where('userId', '==', user.id)
-        .where('month', '>=', monthStart)
-        .where('month', '<=', monthEnd)
-        .get(),
+      db.collection('budgets').where('userId', '==', user.id).get(),
     ])
 
     const allTransactions = txsSnapshot.docs.map(doc => {
@@ -52,12 +48,17 @@ export async function GET(request) {
     })
 
     // Enrich budgets with in-memory spent info
-    const budgetsWithSpent = budgetsSnapshot.docs.map(doc => {
-      const data = doc.data()
-      const spent = currentCategoryMap[data.category] || 0
-      return {
-        id: doc.id,
-        category: data.category,
+    const budgetsWithSpent = budgetsSnapshot.docs
+      .filter(doc => {
+        const mVal = doc.data().month ? doc.data().month.toDate() : null
+        return mVal && mVal >= monthStart && mVal <= monthEnd
+      })
+      .map(doc => {
+        const data = doc.data()
+        const spent = currentCategoryMap[data.category] || 0
+        return {
+          id: doc.id,
+          category: data.category,
         limit: data.limit,
         month: data.month ? data.month.toDate().toISOString() : null,
         spent,

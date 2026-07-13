@@ -20,11 +20,7 @@ export async function GET(request) {
     const [userDoc, txsSnapshot, budgetsSnapshot, notifsSnapshot] = await Promise.all([
       db.collection('users').doc(user.id).get(),
       db.collection('transactions').where('userId', '==', user.id).get(),
-      db.collection('budgets')
-        .where('userId', '==', user.id)
-        .where('month', '>=', monthStart)
-        .where('month', '<=', monthEnd)
-        .get(),
+      db.collection('budgets').where('userId', '==', user.id).get(),
       db.collection('notifications')
         .where('userId', '==', user.id)
         .where('read', '==', false)
@@ -85,13 +81,18 @@ export async function GET(request) {
     })
 
     // Enrich budgets
-    const enrichedBudgets = budgetsSnapshot.docs.map(doc => {
-      const data = doc.data()
-      const spentAmount = spentMap[data.category] || 0
-      return {
-        id: doc.id,
-        category: data.category,
-        limit: data.limit,
+    const enrichedBudgets = budgetsSnapshot.docs
+      .filter(doc => {
+        const mVal = doc.data().month ? doc.data().month.toDate() : null
+        return mVal && mVal >= monthStart && mVal <= monthEnd
+      })
+      .map(doc => {
+        const data = doc.data()
+        const spentAmount = spentMap[data.category] || 0
+        return {
+          id: doc.id,
+          category: data.category,
+          limit: data.limit,
         month: data.month ? data.month.toDate().toISOString() : null,
         spent: spentAmount,
         remaining: data.limit - spentAmount,

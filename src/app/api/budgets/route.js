@@ -25,43 +25,46 @@ export async function GET(request) {
       monthEnd = endOfMonth(new Date())
     }
 
-    // Query budgets for this month
+    // Query budgets (filtering by month in-memory later)
     const budgetsSnapshot = await db.collection('budgets')
       .where('userId', '==', user.id)
-      .where('month', '>=', monthStart)
-      .where('month', '<=', monthEnd)
       .get()
 
-    // Query transactions for expense aggregation
+    // Query all transactions for user (requires no compound indexes)
     const txSnapshot = await db.collection('transactions')
       .where('userId', '==', user.id)
-      .where('type', '==', 'EXPENSE')
-      .where('date', '>=', monthStart)
-      .where('date', '<=', monthEnd)
       .get()
 
     // Sum expenses by category in memory
     const spentMap = {}
     txSnapshot.docs.forEach(doc => {
       const data = doc.data()
-      spentMap[data.category] = (spentMap[data.category] || 0) + (data.amount || 0)
+      const txDate = data.date ? data.date.toDate() : null
+      if (data.type === 'EXPENSE' && txDate && txDate >= monthStart && txDate <= monthEnd) {
+        spentMap[data.category] = (spentMap[data.category] || 0) + (data.amount || 0)
+      }
     })
 
     // Enrich budgets with spent data
-    const enriched = budgetsSnapshot.docs.map(doc => {
-      const data = doc.data()
-      const spentAmount = spentMap[data.category] || 0
-      return {
-        id: doc.id,
-        category: data.category,
-        limit: data.limit,
-        month: data.month ? data.month.toDate().toISOString() : null,
-        spent: spentAmount,
-        remaining: data.limit - spentAmount,
-        percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
-        isExceeded: spentAmount > data.limit,
-      }
-    })
+    const enriched = budgetsSnapshot.docs
+      .filter(doc => {
+        const mVal = doc.data().month ? doc.data().month.toDate() : null
+        return mVal && mVal >= monthStart && mVal <= monthEnd
+      })
+      .map(doc => {
+        const data = doc.data()
+        const spentAmount = spentMap[data.category] || 0
+        return {
+          id: doc.id,
+          category: data.category,
+          limit: data.limit,
+          month: data.month ? data.month.toDate().toISOString() : null,
+          spent: spentAmount,
+          remaining: data.limit - spentAmount,
+          percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
+          isExceeded: spentAmount > data.limit,
+        }
+      })
 
     return NextResponse.json({ budgets: enriched })
   } catch (error) {

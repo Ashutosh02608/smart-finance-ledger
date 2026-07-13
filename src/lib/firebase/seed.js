@@ -3,11 +3,12 @@
  * Run: node src/lib/firebase/seed.js
  */
 require('dotenv').config({ path: '.env.local' })
-const { db } = require('./admin')
+const { db, auth } = require('./admin')
 const { startOfMonth } = require('date-fns')
 
 const DEMO_USER_ID = 'demo-user-seed-id'
 const DEMO_EMAIL = 'demo@smartfinance.app'
+
 
 const DEFAULT_CATEGORIES = {
   INCOME: [
@@ -40,7 +41,24 @@ async function deleteCollection(collectionRef) {
 async function main() {
   console.log('🌱 Seeding Firestore database...')
 
-  // Clear existing demo records
+  // Seed user in Firebase Authentication
+  try {
+    await auth.createUser({
+      uid: DEMO_USER_ID,
+      email: DEMO_EMAIL,
+      password: 'password123',
+      displayName: 'Demo User',
+    })
+    console.log('✅ Demo user credentials created in Firebase Auth (Email: demo@smartfinance.app, Password: password123)')
+  } catch (error) {
+    if (error.code === 'auth/uid-already-exists' || error.code === 'auth/email-already-in-use') {
+      console.log('ℹ️ Demo user credentials already exist in Firebase Auth.')
+    } else {
+      console.error('⚠️ Could not seed Firebase Auth user:', error.message)
+    }
+  }
+
+  // Clear existing demo records in Firestore
   const collections = ['users', 'transactions', 'budgets', 'notifications', 'categories']
   for (const name of collections) {
     await deleteCollection(db.collection(name))
