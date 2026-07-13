@@ -8,7 +8,8 @@ import { User, Bell, Palette, Trash2, Save, AlertTriangle } from 'lucide-react'
 import axios from 'axios'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
-import { ConfirmDialog } from '@/components/ui/Modal'
+import { ConfirmDialog, Modal } from '@/components/ui/Modal'
+import { updatePassword, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth'
 import { toast } from '@/components/ui/Toaster'
 import { profileSchema } from '@/lib/validations'
 import { useRouter } from 'next/navigation'
@@ -30,6 +31,56 @@ export default function SettingsPage() {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const router = useRouter()
+
+  const [passwordOpen, setPasswordOpen] = useState(false)
+  const [currentPassword, setCurrentPassword] = useState('')
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [updatingPassword, setUpdatingPassword] = useState(false)
+
+  const handlePasswordChange = async (e) => {
+    e.preventDefault()
+    if (!currentPassword) {
+      toast.error('Current password is required')
+      return
+    }
+    if (newPassword.length < 6) {
+      toast.error('Password must be at least 6 characters')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error('Passwords do not match')
+      return
+    }
+    setUpdatingPassword(true)
+    try {
+      const u = auth.currentUser
+      if (u && u.email) {
+        // Reauthenticate the user first using their current password
+        const credential = EmailAuthProvider.credential(u.email, currentPassword)
+        await reauthenticateWithCredential(u, credential)
+
+        // Then update the password
+        await updatePassword(u, newPassword)
+        toast.success('Password updated successfully')
+        setPasswordOpen(false)
+        setCurrentPassword('')
+        setNewPassword('')
+        setConfirmPassword('')
+      } else {
+        toast.error('No authenticated user found')
+      }
+    } catch (error) {
+      console.error(error)
+      if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
+        toast.error('Incorrect current password')
+      } else {
+        toast.error(error.message || 'Failed to update password')
+      }
+    } finally {
+      setUpdatingPassword(false)
+    }
+  }
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm({
     resolver: zodResolver(profileSchema.partial()),
@@ -137,7 +188,8 @@ export default function SettingsPage() {
                   </select>
                 </div>
               </div>
-              <div className="flex justify-end pt-2">
+              <div className="flex justify-between items-center pt-2">
+                <Button type="button" variant="outline" onClick={() => setPasswordOpen(true)}>Change Password</Button>
                 <Button type="submit" isLoading={saving} leftIcon={<Save className="w-3.5 h-3.5" />}>Save Changes</Button>
               </div>
             </motion.div>
@@ -213,6 +265,56 @@ export default function SettingsPage() {
         description="This will permanently delete all your data including transactions, budgets, and notifications. This cannot be undone."
         confirmLabel="Delete My Account"
       />
+
+      <Modal
+        isOpen={passwordOpen}
+        onClose={() => setPasswordOpen(false)}
+        title="Change Password"
+        description="Enter your current and new password below."
+        size="sm"
+      >
+        <form onSubmit={handlePasswordChange} className="space-y-4">
+          <Input
+            label="Current Password"
+            type="password"
+            value={currentPassword}
+            onChange={(e) => setCurrentPassword(e.target.value)}
+            placeholder="Your current password"
+            required
+          />
+          <Input
+            label="New Password"
+            type="password"
+            value={newPassword}
+            onChange={(e) => setNewPassword(e.target.value)}
+            placeholder="At least 6 characters"
+            required
+          />
+          <Input
+            label="Confirm New Password"
+            type="password"
+            value={confirmPassword}
+            onChange={(e) => setConfirmPassword(e.target.value)}
+            placeholder="Confirm new password"
+            required
+          />
+          <div className="flex gap-3 justify-end mt-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setPasswordOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              isLoading={updatingPassword}
+            >
+              Update Password
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </>
   )
 }

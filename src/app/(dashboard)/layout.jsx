@@ -10,10 +10,15 @@ import axios from 'axios'
 export default function DashboardLayout({ children }) {
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [dashData, setDashData] = useState(null)
+  const [notifications, setNotifications] = useState([])
 
   useEffect(() => {
     axios.get('/api/dashboard')
       .then(res => setDashData(res.data))
+      .catch(() => {})
+
+    axios.get('/api/notifications')
+      .then(res => setNotifications(res.data.notifications || []))
       .catch(() => {})
   }, [])
 
@@ -21,6 +26,7 @@ export default function DashboardLayout({ children }) {
     try {
       await axios.patch('/api/notifications')
       setDashData(prev => prev ? { ...prev, unreadNotifications: 0 } : prev)
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })))
     } catch {}
   }
 
@@ -37,7 +43,7 @@ export default function DashboardLayout({ children }) {
         <TopNav
           user={dashData?.user}
           unreadCount={dashData?.unreadNotifications || 0}
-          notifications={[]}
+          notifications={notifications}
           onMenuClick={() => setMobileNavOpen(true)}
           onNotificationRead={markAllRead}
         />

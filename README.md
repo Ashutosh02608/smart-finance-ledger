@@ -1,17 +1,29 @@
 # Smart Finance Ledger 💰
 
-> A production-quality personal finance SaaS application with AI-powered insights, offline support, and a Financial Health Score system.
+> A production-quality personal finance application with AI-powered insights, offline support, a Financial Health Score system, and Firebase Suite (Auth + Firestore) integration.
 
 ![Next.js](https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js)
-![Prisma](https://img.shields.io/badge/Prisma-ORM-2D3748?style=flat-square&logo=prisma)
-![Supabase](https://img.shields.io/badge/Supabase-Auth-3ECF8E?style=flat-square&logo=supabase)
+![Firebase](https://img.shields.io/badge/Firebase-Suite-FFCA28?style=flat-square&logo=firebase&logoColor=black)
 ![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v4-06B6D4?style=flat-square&logo=tailwindcss)
 
 ---
 
 ## 📸 Screenshots
 
-> _(Add screenshots of: Dashboard, Transactions, Analytics, Budgets, Settings here)_
+### Dashboard
+![Dashboard](public/screenshots/dashboard.png)
+
+### Transactions Ledger
+![Transactions](public/screenshots/transactions.png)
+
+### Budgets & Forecasts
+![Budgets](public/screenshots/budgets.png)
+
+### Trends & Analytics
+![Analytics](public/screenshots/analytics.png)
+
+### Notifications Dropdown
+![Notifications](public/screenshots/notifications.png)
 
 ---
 
@@ -19,17 +31,17 @@
 
 | Feature | Description |
 |---|---|
-| 🔐 **Auth** | Supabase Auth — Register, Login, Logout, Password Reset, Email Verification |
+| 🔐 **Auth** | **Firebase Auth** — Register, Login, Logout, Password Reset, Current Password verification, and full Account deletion |
 | 📊 **Dashboard** | Stats cards, Health Score, Budget progress, AI insights, Recent transactions |
 | 💸 **Transactions** | Full CRUD, search, filter, sort, bulk delete, CSV export, pagination |
 | 🎯 **Budgets** | Monthly budgets per category, progress bars, burn rate predictions |
-| 📈 **Analytics** | 6 interactive Recharts graphs — income, expense, savings, daily, category, net worth |
-| 🔔 **Notifications** | Internal notification center with unread count, bulk clear, email alerts via Resend |
+| 📈 **Analytics** | Interactive Recharts graphs — income vs. expense comparison, category breakdown, daily spending trends |
+| 🔔 **Notifications** | Internal notification center with unread count, welcome triggers, and email alerts via Resend |
 | 🧠 **AI Insights** | Rules-based spending analysis comparing month-over-month category changes |
 | 💯 **Health Score** | Algorithmic score out of 100 with weighted factors and recommendations |
 | 🔮 **Predictions** | Smart burn rate analysis predicting month-end spending |
 | 🌐 **Offline Mode** | IndexedDB local storage + sync queue for offline-first support |
-| 🌙 **Dark / Light Mode** | Smooth theme toggle via next-themes |
+| 🌙 **Dark / Light Mode** | Smooth theme toggle via next-themes (React 19 & system-aware) |
 | 📱 **Responsive** | Mobile-first design with collapsible sidebar and mobile drawer |
 | ⌨️ **Keyboard Shortcuts** | Cmd+K global search |
 
@@ -54,18 +66,22 @@ src/
 │   └── (dashboard)/         # Dashboard layout + all pages
 ├── components/
 │   ├── ui/                  # Button, Input, Modal, Badge, Skeleton, EmptyState
+│   ├── providers/           # ThemeProvider (React 19), AuthProvider (Session synchronization)
 │   ├── dashboard/           # Sidebar, TopNav, OfflineBanner, widgets
 │   └── charts/              # Recharts wrapper components
 ├── lib/
-│   ├── prisma.js            # Prisma singleton
-│   ├── supabase/            # Client + Server Supabase factories
+│   ├── firebase/            # Firebase SDK Initializers
+│   │   ├── client.js        # Client-side SDK & Auth Instance
+│   │   ├── admin.js         # Firebase Admin SDK & Firestore Connection
+│   │   ├── server-auth.js   # jose-powered Edge Session Parser
+│   │   └── seed.js          # Firestore Collections Seeder
 │   ├── health-score.js      # Financial Health Score engine
 │   ├── predictions.js       # Budget prediction + insight generator
 │   ├── db-local.js          # IndexedDB offline store
-│   ├── resend.js            # Email templates
-│   ├── utils.js             # Shared utilities
-│   └── validations.js       # Zod schemas
-├── middleware.js             # Auth route protection
+│   ├── resend.js            # Email templates & Resend Integration
+│   ├── utils.js             # Shared utilities & Safe Date Parsers
+│   └── validations.js       # Zod validation schemas
+├── proxy.js                 # Next.js 16 Edge Route Middleware Protection
 ```
 
 ---
@@ -75,9 +91,8 @@ src/
 ### Prerequisites
 
 - Node.js 18+
-- PostgreSQL database (Supabase recommended)
-- Supabase project
-- Resend account (for emails)
+- Firebase Project (Authentication + Cloud Firestore database enabled)
+- Resend Account (for transactional emails)
 
 ### Installation
 
@@ -98,27 +113,34 @@ cp .env.example .env.local
 Edit `.env.local` with your values:
 
 ```env
-DATABASE_URL="postgresql://..."
-NEXT_PUBLIC_SUPABASE_URL="https://xxx.supabase.co"
-NEXT_PUBLIC_SUPABASE_ANON_KEY="..."
-SUPABASE_SERVICE_ROLE_KEY="..."
+# --- Firebase Client SDK (Public) ---
+NEXT_PUBLIC_FIREBASE_API_KEY="AIzaSy..."
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN="smart-finance-ledger-deaf3.firebaseapp.com"
+NEXT_PUBLIC_FIREBASE_PROJECT_ID="smart-finance-ledger-deaf3"
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET="smart-finance-ledger-deaf3.firebasestorage.app"
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID="937259392568"
+NEXT_PUBLIC_FIREBASE_APP_ID="1:937259392568:web:31fc42dd890fad3694d0cd"
+
+# --- Firebase Server SDK (Private Admin) ---
+FIREBASE_CLIENT_EMAIL="firebase-adminsdk-fbsvc@smart-finance-ledger-deaf3.iam.gserviceaccount.com"
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQ...\n-----END PRIVATE KEY-----\n"
+
+# --- Resend (Email) ---
 RESEND_API_KEY="re_..."
 RESEND_FROM_EMAIL="Smart Finance <noreply@yourdomain.com>"
+
+# --- App ---
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
+NEXT_PUBLIC_APP_NAME="Smart Finance Ledger"
 ```
 
-### Database Setup
+### Database Seeding
 
 ```bash
-# Push schema to database
-npm run db:push
-
-# Seed with demo data
+# Seed Firestore collections and create the demo Auth account
 npm run db:seed
-
-# (Optional) Open Prisma Studio
-npm run db:studio
 ```
+This registers the default account `demo@smartfinance.app` with the password `password123` in Firebase Auth, creates a user profile document in Firestore, and seeds realistic transaction history, category listings, and budgets.
 
 ### Run Locally
 
@@ -156,102 +178,33 @@ Per-Category Risk = LOW / MEDIUM / HIGH based on projection vs limit
 
 ---
 
-## 📦 Deployment
-
-### Vercel (Recommended)
-
-```bash
-vercel deploy
-
-# Set environment variables in Vercel Dashboard → Settings → Environment Variables
-```
-
-### Environment Variables Required on Vercel
-
-Same as `.env.local` above.
-
----
-
-## 🐳 Docker (Optional)
-
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --production
-COPY . .
-RUN npx prisma generate
-RUN npm run build
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
----
-
 ## 🤖 AI Usage Report
 
 ### AI Tools Used
+* **UI Scaffolding**: Initial React component layout and style structures.
+* **Firebase Seeding Templates**: Formulating basic mock transaction generator templates.
+* **Zod Schemas**: Boilerplate schema configuration matching profile settings.
 
-AI assistance accelerated development in the following areas:
+### Where AI Fell Short & Human Corrections
+1. **Firestore Compound Query Failures (500 Crashes)**:
+   * *The Issue*: AI wrote query logic joining equality checks (`userId == uid`) and date ranges (`month >= monthStart`) directly in Firestore queries. Because Firestore requires a custom composite index configured in the Firebase Console for compound queries, this caused query exceptions that crashed the server.
+   * *Human Correction*: Refactored all API routes (`/api/dashboard`, `/api/insights`, `/api/budgets`) to fetch user-scoped documents and perform range checking/aggregations **in memory**. This guarantees a **zero-configuration** database setup that is immune to index-related 500 crashes.
+2. **Firebase Admin Hot-Reload Crashes**:
+   * *The Issue*: AI called `db.settings({ ignoreUndefinedProperties: true })` globally on re-imported Firestore connections. During local Next.js hot-reloads, this was invoked multiple times, causing Firestore to crash since settings can only be set once.
+   * *Human Correction*: Cached the Firestore reference globally (`globalThis.firestoreDb`) and wrapped the settings initialization in a `try/catch` block to absorb duplicate calls safely.
+3. **React 19 & Next.js 16 Hydration Mismatches**:
+   * *The Issue*: AI generated timezone-dependent greeting strings ("Good evening") and raw `<script>` tags inside client-rendered components for theme flashes. React 19 flags these as hydration mismatches.
+   * *Human Correction*: Replaced inline scripts with console warning interceptors and implemented client-side mounting state gates (`mounted` checks) on timezone-dependent elements, rendering placeholder strings during initial server loads and updating them on mount.
+4. **Reference Variable Errors**:
+   * *The Issue*: AI initialized `currentByCategory` but referenced `currentMonthByCategory` when invoking predictive analytics, causing a silent reference error crash.
+   * *Human Correction*: Built diagnostic scripts (`scratch/test-endpoints.js`) simulating API calculations and pinpointed the syntax error.
+5. **Session Verification Edge Security**:
+   * *The Issue*: AI suggested Node-specific JWT verification libraries that are incompatible with Next.js edge runtime environments.
+   * *Human Correction*: Programmed `src/proxy.js` utilizing `jose` for lightweight, Edge-native JWT payload decoding.
+6. **Firebase Password Reauthentication UX**:
+   * *The Issue*: AI omitted reauthenticating users when requesting password changes, causing Firebase Auth to reject updates with a `requires-recent-login` error.
+   * *Human Correction*: Designed the "Change Password" dialog to capture current credentials and trigger a reauthentication credential handshake before executing the update.
 
-- **UI Scaffolding**: Initial component structure and layout patterns
-- **CRUD Generation**: Basic API route handler boilerplate
-- **Prisma Models**: Initial schema drafts and relation definitions
-- **Form Validation**: Initial Zod schema structures
-- **Boilerplate**: Repetitive pattern generation (loading states, error handling patterns)
-
-### Where AI Failed
-
-AI tools produced code that required significant human correction:
-
-- **Incorrect validation logic**: AI missed edge cases in amount/date validation (negative amounts, future dates)
-- **Redundant state management**: Multiple useState calls that should have been consolidated into a single object or custom hook
-- **Inefficient Prisma queries**: AI suggested N+1 query patterns for budget enrichment (fetching spent amount per budget in a loop) — replaced with a single aggregated query pattern
-- **Hallucinated APIs**: Referenced non-existent Supabase SSR APIs (`createMiddlewareClient` which was deprecated)
-- **Poor component structure**: Over-engineered prop drilling without proper composition
-- **Missing edge cases**: Offline mode sync queue didn't handle race conditions or retry failures
-- **Weak error handling**: API routes returned generic 500 errors without proper user-facing messages
-
-### Human Engineering Decisions
-
-The following were designed, architected, and implemented entirely through engineering judgment:
-
-1. **Financial Health Score Engine** (`lib/health-score.js`): Designed the 5-factor weighted scoring algorithm with thresholds calibrated for Indian financial context (30% savings rate target, ₹10k large expense threshold)
-
-2. **Offline Sync Architecture**: Chose IndexedDB with FIFO sync queue over Service Workers for simpler mental model and predictable conflict resolution behavior
-
-3. **Database Indexing Strategy**: Added compound indexes on `[userId, date]`, `[userId, type]`, and `[userId, category]` to ensure O(log n) performance on all common filter combinations
-
-4. **Optimistic UI Pattern**: Dashboard updates immediately in IndexedDB; server sync happens asynchronously. This ensures zero-latency UX even on slow connections
-
-5. **Email Fire-and-Forget**: Budget exceeded and large expense emails use `setImmediate()` to not block the API response, preventing email failures from affecting transaction saving
-
-6. **`/api/dashboard` Aggregation Endpoint**: A single endpoint that runs all dashboard queries in parallel using `Promise.all()`, reducing page load from 6 sequential requests to 1 parallel batch
-
-7. **Burn Rate Prediction Algorithm**: Designed using statistical daily average rather than linear projections to handle irregular spending patterns correctly
-
-8. **Sidebar Collapse with CSS Variables**: Used a combination of Framer Motion width animation and CSS custom properties (rather than conditional rendering) to preserve sidebar state across navigation
-
-9. **Category Seeding on Registration**: Default categories are seeded per-user on registration (not globally) to support future per-user customization without schema changes
-
-10. **Upsert Pattern for Budgets**: Used Prisma's `upsert` with compound unique key `[userId, category, month]` to prevent duplicate budget records from form re-submissions
-
----
-
-## 🔮 Future Improvements
-
-- [ ] Recurring transactions with CRON jobs
-- [ ] Investment portfolio tracking
-- [ ] Shared accounts / household budgets
-- [ ] Bank statement CSV import
-- [ ] Mobile app (React Native)
-- [ ] Advanced debt tracking module
-- [ ] AI-powered anomaly detection using ML models
-- [ ] Multi-currency conversion with live rates
-- [ ] Receipt photo scanning
-
----
-
-## 📄 License
-
-MIT © 2024 Smart Finance Ledger
+### Human Engineering Decisions (Unique Twist)
+* **Zero-Config Firestore In-Memory Engine**: By moving pagination, sorting, search, and date filters from the database layer to the application layer, the project requires zero database index configuration.
+* **Offline sync queue with FIFO execution**: Uses an IndexedDB FIFO queue to store actions completed offline and sync them sequentially to Firestore upon reconnection, handling network latency elegantly.

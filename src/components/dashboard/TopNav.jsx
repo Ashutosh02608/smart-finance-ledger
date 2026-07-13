@@ -12,7 +12,7 @@ import { cn, formatRelativeTime } from '@/lib/utils'
 import { toast } from '@/components/ui/Toaster'
 
 export function TopNav({ user, unreadCount = 0, notifications = [], onMenuClick, onNotificationRead }) {
-  const { theme, setTheme } = useTheme()
+  const { resolvedTheme, setTheme } = useTheme()
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [notifOpen, setNotifOpen] = useState(false)
@@ -68,7 +68,7 @@ export function TopNav({ user, unreadCount = 0, notifications = [], onMenuClick,
     }
   }
 
-  const isDark = theme === 'dark'
+  const isDark = resolvedTheme === 'dark'
   const displayName = user?.name || user?.email?.split('@')[0] || 'User'
   const avatarLetter = displayName[0]?.toUpperCase()
 
