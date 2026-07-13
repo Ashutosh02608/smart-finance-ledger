@@ -11,7 +11,8 @@ export async function GET(request, { params }) {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const docRef = db.collection('transactions').doc(params.id)
+    const { id } = await params
+    const docRef = db.collection('transactions').doc(id)
     const doc = await docRef.get()
 
     if (!doc.exists || doc.data().userId !== user.id) {
@@ -40,7 +41,8 @@ export async function PUT(request, { params }) {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const docRef = db.collection('transactions').doc(params.id)
+    const { id } = await params
+    const docRef = db.collection('transactions').doc(id)
     const doc = await docRef.get()
 
     if (!doc.exists || doc.data().userId !== user.id) {
@@ -91,7 +93,8 @@ export async function DELETE(request, { params }) {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const docRef = db.collection('transactions').doc(params.id)
+    const { id } = await params
+    const docRef = db.collection('transactions').doc(id)
     const doc = await docRef.get()
 
     if (!doc.exists || doc.data().userId !== user.id) {
