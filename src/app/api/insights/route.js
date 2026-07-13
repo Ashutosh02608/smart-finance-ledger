@@ -122,7 +122,7 @@ export async function GET(request) {
       }
     })
 
-    const currentByCategory = Object.entries(currentCategoryMap).map(([category, total]) => ({ category, total }))
+    const currentMonthByCategory = Object.entries(currentCategoryMap).map(([category, total]) => ({ category, total }))
     const lastMonthByCategory = Object.entries(lastCategoryMap).map(([category, total]) => ({ category, total }))
 
     const insights = generateInsights({
