@@ -8,6 +8,7 @@
 [![Firebase](https://img.shields.io/badge/Firebase-Suite-FFCA28?style=flat-square&logo=firebase&logoColor=black)](https://firebase.google.com)
 [![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v4-06B6D4?style=flat-square&logo=tailwindcss)](https://tailwindcss.com)
 [![License: MIT](https://img.shields.io/badge/License-MIT-violet?style=flat-square)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-black?style=flat-square&logo=vercel)](https://smart-finance-ledger.vercel.app)
 
 > Built for the **Bytex Challenge** — a full-stack financial ledger with AI-powered insights, real-time notifications, offline sync, and a Financial Health Score engine.
 
@@ -377,7 +378,12 @@ await updatePassword(user, newPassword)
 
 ## 📦 Deployment
 
-### Vercel (Recommended)
+### 🌐 Live Demo
+> **[https://smart-finance-ledger.vercel.app](https://smart-finance-ledger.vercel.app)**
+>
+> Demo credentials: `demo@smartfinance.app` / `password123`
+
+### Deploy Your Own (Vercel)
 ```bash
 npm install -g vercel
 vercel deploy
