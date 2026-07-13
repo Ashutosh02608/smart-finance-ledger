@@ -17,15 +17,12 @@ export async function GET(request) {
     const monthStart = startOfMonth(now)
     const monthEnd = endOfMonth(now)
 
-    // Fetch collections in parallel
+    // Fetch collections in parallel — single-field where() only to avoid composite index requirements
     const [userDoc, txsSnapshot, budgetsSnapshot, notifsSnapshot] = await Promise.all([
       db.collection('users').doc(user.id).get(),
       db.collection('transactions').where('userId', '==', user.id).get(),
       db.collection('budgets').where('userId', '==', user.id).get(),
-      db.collection('notifications')
-        .where('userId', '==', user.id)
-        .where('read', '==', false)
-        .get(),
+      db.collection('notifications').where('userId', '==', user.id).get(),
     ])
 
     if (!userDoc.exists) {
@@ -33,7 +30,7 @@ export async function GET(request) {
     }
 
     const userData = { id: userDoc.id, ...userDoc.data() }
-    const unreadNotifications = notifsSnapshot.size
+    const unreadNotifications = notifsSnapshot.docs.filter(d => d.data().read === false).length
 
     // Parse all transactions safely
     const allTransactions = txsSnapshot.docs.map(doc => {

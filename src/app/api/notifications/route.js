@@ -16,13 +16,9 @@ export async function GET(request) {
     const unreadOnly = searchParams.get('unread') === 'true'
     const limit = parseInt(searchParams.get('limit') || '50')
 
-    let q = db.collection('notifications').where('userId', '==', user.id)
-    if (unreadOnly) {
-      q = q.where('read', '==', false)
-    }
-    const snapshot = await q.get()
+    // Single-field where() only — avoids composite index requirements
+    const snapshot = await db.collection('notifications').where('userId', '==', user.id).get()
 
-    // Map and sort in-memory (to avoid index exceptions on compound fields)
     let list = snapshot.docs.map(doc => {
       const data = doc.data()
       return {
@@ -32,20 +28,17 @@ export async function GET(request) {
       }
     })
 
+    // Filter unread in-memory if needed
+    const unreadCount = list.filter(n => n.read === false).length
+    if (unreadOnly) list = list.filter(n => n.read === false)
+
     list.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     const notifications = list.slice(0, limit)
-
-    // Calculate exact unread count
-    const unreadSnapshot = await db.collection('notifications')
-      .where('userId', '==', user.id)
-      .where('read', '==', false)
-      .get()
-    const unreadCount = unreadSnapshot.size
 
     return NextResponse.json({ notifications, unreadCount })
   } catch (error) {
     console.error('[GET /api/notifications]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }
 
@@ -56,28 +49,24 @@ export async function PATCH(request) {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const snapshot = await db.collection('notifications')
-      .where('userId', '==', user.id)
-      .where('read', '==', false)
-      .get()
+    // Single-field where() — filter unread in-memory
+    const snapshot = await db.collection('notifications').where('userId', '==', user.id).get()
+    const unreadDocs = snapshot.docs.filter(doc => doc.data().read === false)
 
-    if (!snapshot.empty) {
+    if (unreadDocs.length > 0) {
       const batch = db.batch()
-      snapshot.docs.forEach(doc => {
-        batch.update(doc.ref, { read: true })
-      })
+      unreadDocs.forEach(doc => batch.update(doc.ref, { read: true }))
       await batch.commit()
     }
 
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('[PATCH /api/notifications]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }
 
 // ─── DELETE /api/notifications ────────────────────────────────────────────────
-// Clear either bulk specific notifications or all notifications
 export async function DELETE(request) {
   try {
     const user = await getSessionUser()
@@ -95,20 +84,14 @@ export async function DELETE(request) {
         }
       }
     } else {
-      // Clear all notifications for user
-      const snapshot = await db.collection('notifications')
-        .where('userId', '==', user.id)
-        .get()
-
-      snapshot.docs.forEach(doc => {
-        batch.delete(doc.ref)
-      })
+      const snapshot = await db.collection('notifications').where('userId', '==', user.id).get()
+      snapshot.docs.forEach(doc => batch.delete(doc.ref))
     }
 
     await batch.commit()
     return NextResponse.json({ success: true })
   } catch (error) {
     console.error('[DELETE /api/notifications]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }
