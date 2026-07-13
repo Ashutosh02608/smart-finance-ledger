@@ -42,7 +42,11 @@ let db
 
 if (!globalForFirebase.firestoreDb) {
   db = getFirestore(app)
-  db.settings({ ignoreUndefinedProperties: true })
+  try {
+    db.settings({ ignoreUndefinedProperties: true })
+  } catch (error) {
+    console.warn('[Firestore Settings Warning]', error.message)
+  }
   globalForFirebase.firestoreDb = db
 } else {
   db = globalForFirebase.firestoreDb
