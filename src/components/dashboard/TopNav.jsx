@@ -22,6 +22,9 @@ export function TopNav({ user, unreadCount = 0, notifications = [], onMenuClick,
   const notifRef = useRef(null)
   const profileRef = useRef(null)
 
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => { setMounted(true) }, [])
+
   // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e) => {
@@ -100,7 +103,7 @@ export function TopNav({ user, unreadCount = 0, notifications = [], onMenuClick,
             aria-label="Toggle theme"
           >
             <AnimatePresence mode="wait">
-              {isDark ? (
+              {mounted && (isDark ? (
                 <motion.div key="sun" initial={{ rotate: -90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: 90, opacity: 0 }} transition={{ duration: 0.15 }}>
                   <Sun className="w-4 h-4" />
                 </motion.div>
@@ -108,7 +111,7 @@ export function TopNav({ user, unreadCount = 0, notifications = [], onMenuClick,
                 <motion.div key="moon" initial={{ rotate: 90, opacity: 0 }} animate={{ rotate: 0, opacity: 1 }} exit={{ rotate: -90, opacity: 0 }} transition={{ duration: 0.15 }}>
                   <Moon className="w-4 h-4" />
                 </motion.div>
-              )}
+              ))}
             </AnimatePresence>
           </button>
 

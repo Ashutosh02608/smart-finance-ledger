@@ -35,10 +35,19 @@ if (getApps().length === 0) {
 }
 
 const auth = getAuth(app)
-const db = getFirestore(app)
 
-// Enable ignoring undefined properties in Firestore queries/saves
-db.settings({ ignoreUndefinedProperties: true })
+// Cache Firestore DB instance globally to avoid duplicate settings() calls during dev hot-reloads
+const globalForFirebase = globalThis
+let db
+
+if (!globalForFirebase.firestoreDb) {
+  db = getFirestore(app)
+  db.settings({ ignoreUndefinedProperties: true })
+  globalForFirebase.firestoreDb = db
+} else {
+  db = globalForFirebase.firestoreDb
+}
 
 export { app, auth, db }
+
 export default app
