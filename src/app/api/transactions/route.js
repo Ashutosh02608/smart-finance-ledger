@@ -1,8 +1,8 @@
 export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import prisma from '@/lib/prisma'
+import { getSessionUser } from '@/lib/firebase/server-auth'
+import { db } from '@/lib/firebase/admin'
 import { transactionSchema } from '@/lib/validations'
 import { sendBudgetExceededEmail, sendLargeExpenseEmail } from '@/lib/resend'
 import { startOfMonth, endOfMonth } from 'date-fns'
@@ -10,8 +10,7 @@ import { startOfMonth, endOfMonth } from 'date-fns'
 // ─── GET /api/transactions ─────────────────────────────────────────────────────
 export async function GET(request) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
@@ -27,48 +26,80 @@ export async function GET(request) {
     const minAmount = parseFloat(searchParams.get('minAmount') || '0')
     const maxAmount = parseFloat(searchParams.get('maxAmount') || '0')
 
-    const where = {
-      userId: user.id,
-      ...(type && { type }),
-      ...(category && { category }),
-      ...(search && {
-        OR: [
-          { title: { contains: search, mode: 'insensitive' } },
-          { notes: { contains: search, mode: 'insensitive' } },
-          { category: { contains: search, mode: 'insensitive' } },
-        ],
-      }),
-      ...(startDate || endDate ? {
-        date: {
-          ...(startDate && { gte: new Date(startDate) }),
-          ...(endDate && { lte: new Date(endDate) }),
-        },
-      } : {}),
-      ...(minAmount > 0 || maxAmount > 0 ? {
-        amount: {
-          ...(minAmount > 0 && { gte: minAmount }),
-          ...(maxAmount > 0 && { lte: maxAmount }),
-        },
-      } : {}),
+    // Fetch all user transactions to filter in-memory (eliminating strict Firestore index constraints)
+    const snapshot = await db.collection('transactions').where('userId', '==', user.id).get()
+
+    let list = snapshot.docs.map(doc => {
+      const data = doc.data()
+      return {
+        id: doc.id,
+        ...data,
+        date: data.date ? data.date.toDate().toISOString() : null,
+        createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+        updatedAt: data.updatedAt ? data.updatedAt.toDate().toISOString() : null,
+      }
+    })
+
+    // Apply in-memory filters
+    if (type) {
+      list = list.filter(t => t.type === type)
+    }
+    if (category) {
+      list = list.filter(t => t.category === category)
+    }
+    if (search) {
+      const sq = search.toLowerCase()
+      list = list.filter(t => 
+        (t.title && t.title.toLowerCase().includes(sq)) || 
+        (t.notes && t.notes.toLowerCase().includes(sq)) || 
+        (t.category && t.category.toLowerCase().includes(sq))
+      )
+    }
+    if (startDate) {
+      list = list.filter(t => new Date(t.date) >= new Date(startDate + 'T00:00:00'))
+    }
+    if (endDate) {
+      list = list.filter(t => new Date(t.date) <= new Date(endDate + 'T23:59:59'))
+    }
+    if (minAmount > 0) {
+      list = list.filter(t => t.amount >= minAmount)
+    }
+    if (maxAmount > 0) {
+      list = list.filter(t => t.amount <= maxAmount)
     }
 
-    const [transactions, total] = await Promise.all([
-      prisma.transaction.findMany({
-        where,
-        orderBy: { [sortBy]: sortDir },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-      prisma.transaction.count({ where }),
-    ])
+    // Apply in-memory sorting
+    list.sort((a, b) => {
+      let valA = a[sortBy]
+      let valB = b[sortBy]
+
+      if (sortBy === 'date') {
+        valA = a.date ? new Date(a.date).getTime() : 0
+        valB = b.date ? new Date(b.date).getTime() : 0
+      } else if (sortBy === 'amount') {
+        valA = Number(a.amount || 0)
+        valB = Number(b.amount || 0)
+      } else if (typeof valA === 'string') {
+        valA = valA.toLowerCase()
+        valB = valB.toLowerCase()
+      }
+
+      if (valA < valB) return sortDir === 'asc' ? -1 : 1
+      if (valA > valB) return sortDir === 'asc' ? 1 : -1
+      return 0
+    })
+
+    const total = list.length
+    const totalPages = Math.ceil(total / limit)
+    const paginated = list.slice((page - 1) * limit, page * limit)
 
     return NextResponse.json({
-      transactions,
+      transactions: paginated,
       pagination: {
         page,
         limit,
         total,
-        totalPages: Math.ceil(total / limit),
+        totalPages,
         hasMore: page * limit < total,
       },
     })
@@ -81,8 +112,7 @@ export async function GET(request) {
 // ─── POST /api/transactions ────────────────────────────────────────────────────
 export async function POST(request) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
@@ -98,99 +128,120 @@ export async function POST(request) {
       )
     }
 
-    const transaction = await prisma.transaction.create({
-      data: {
-        ...parsed.data,
-        userId: user.id,
-        date: new Date(parsed.data.date),
-      },
+    const txDate = new Date(parsed.data.date)
+
+    const docRef = await db.collection('transactions').add({
+      ...parsed.data,
+      userId: user.id,
+      date: txDate,
+      createdAt: new Date(),
+      updatedAt: new Date(),
     })
+
+    const doc = await docRef.get()
+    const transaction = {
+      id: doc.id,
+      ...doc.data(),
+      date: doc.data().date.toDate().toISOString(),
+    }
 
     // Fire-and-forget: check budget exceeded + large expense alerts
     setImmediate(async () => {
       try {
-        const dbUser = await prisma.user.findUnique({ where: { id: user.id } })
-        if (!dbUser) return
+        const userDoc = await db.collection('users').doc(user.id).get()
+        if (!userDoc.exists) return
+        const dbUser = userDoc.data()
+
+        const batch = db.batch()
 
         if (transaction.type === 'EXPENSE') {
           // Large expense alert (> ₹10,000)
           if (dbUser.emailOnLargeExpense && transaction.amount >= 10000) {
             await sendLargeExpenseEmail({
-              to: dbUser.email,
+              to: dbUser.email || user.email,
               name: dbUser.name || 'there',
               title: transaction.title,
               amount: transaction.amount,
               category: transaction.category,
-              currency: dbUser.currency,
+              currency: dbUser.currency || 'INR',
             })
           }
 
           // Budget exceeded check
-          const monthStart = startOfMonth(new Date(transaction.date))
-          const monthEnd = endOfMonth(new Date(transaction.date))
+          const monthStart = startOfMonth(txDate)
+          const monthEnd = endOfMonth(txDate)
 
-          const budget = await prisma.budget.findFirst({
-            where: {
-              userId: user.id,
-              category: transaction.category,
-              month: { gte: monthStart, lte: monthEnd },
-            },
-          })
+          // Query matching budget
+          const budgetSnapshot = await db.collection('budgets')
+            .where('userId', '==', user.id)
+            .where('category', '==', transaction.category)
+            .where('month', '>=', monthStart)
+            .where('month', '<=', monthEnd)
+            .limit(1)
+            .get()
 
-          if (budget) {
-            const spent = await prisma.transaction.aggregate({
-              where: {
-                userId: user.id,
-                type: 'EXPENSE',
-                category: transaction.category,
-                date: { gte: monthStart, lte: monthEnd },
-              },
-              _sum: { amount: true },
-            })
+          if (!budgetSnapshot.empty) {
+            const budgetDoc = budgetSnapshot.docs[0]
+            const budgetData = budgetDoc.data()
 
-            const totalSpent = spent._sum.amount || 0
+            // Sum up expenses for category in date range
+            const txsSnapshot = await db.collection('transactions')
+              .where('userId', '==', user.id)
+              .where('type', '==', 'EXPENSE')
+              .where('category', '==', transaction.category)
+              .where('date', '>=', monthStart)
+              .where('date', '<=', monthEnd)
+              .get()
 
-            if (totalSpent > budget.limit && dbUser.emailOnBudgetExceeded) {
+            const totalSpent = txsSnapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0)
+
+            if (totalSpent > budgetData.limit && dbUser.emailOnBudgetExceeded) {
               await sendBudgetExceededEmail({
-                to: dbUser.email,
+                to: dbUser.email || user.email,
                 name: dbUser.name || 'there',
                 category: transaction.category,
-                limit: budget.limit,
+                limit: budgetData.limit,
                 spent: totalSpent,
-                currency: dbUser.currency,
+                currency: dbUser.currency || 'INR',
               })
 
-              // Create internal notification
-              await prisma.notification.create({
-                data: {
-                  userId: user.id,
-                  title: `Budget Exceeded: ${transaction.category}`,
-                  message: `You have spent ₹${Math.round(totalSpent).toLocaleString()} against a budget of ₹${Math.round(budget.limit).toLocaleString()}.`,
-                  type: 'WARNING',
-                },
+              // Create warning notification
+              const notifRef = db.collection('notifications').doc()
+              batch.set(notifRef, {
+                userId: user.id,
+                title: `Budget Exceeded: ${transaction.category}`,
+                message: `You have spent ₹${Math.round(totalSpent).toLocaleString()} against a budget of ₹${Math.round(budgetData.limit).toLocaleString()}.`,
+                type: 'WARNING',
+                read: false,
+                createdAt: new Date(),
               })
             }
           }
 
-          // Create success notification
-          await prisma.notification.create({
-            data: {
-              userId: user.id,
-              title: 'Expense Added',
-              message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added to ${transaction.category}.`,
-              type: 'INFO',
-            },
+          // Create standard expense notification
+          const notifRef = db.collection('notifications').doc()
+          batch.set(notifRef, {
+            userId: user.id,
+            title: 'Expense Added',
+            message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added to ${transaction.category}.`,
+            type: 'INFO',
+            read: false,
+            createdAt: new Date(),
           })
         } else {
-          await prisma.notification.create({
-            data: {
-              userId: user.id,
-              title: 'Income Added',
-              message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added as ${transaction.category}.`,
-              type: 'SUCCESS',
-            },
+          // Create success income notification
+          const notifRef = db.collection('notifications').doc()
+          batch.set(notifRef, {
+            userId: user.id,
+            title: 'Income Added',
+            message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added as ${transaction.category}.`,
+            type: 'SUCCESS',
+            read: false,
+            createdAt: new Date(),
           })
         }
+
+        await batch.commit()
       } catch (e) {
         console.error('[POST /api/transactions] background task error:', e)
       }
@@ -206,8 +257,7 @@ export async function POST(request) {
 // ─── DELETE /api/transactions (bulk delete) ────────────────────────────────────
 export async function DELETE(request) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { ids } = await request.json()
@@ -215,11 +265,24 @@ export async function DELETE(request) {
       return NextResponse.json({ error: 'No IDs provided' }, { status: 400 })
     }
 
-    const deleted = await prisma.transaction.deleteMany({
-      where: { id: { in: ids }, userId: user.id },
-    })
+    const batch = db.batch()
+    let count = 0
 
-    return NextResponse.json({ deleted: deleted.count })
+    // Only delete documents belonging to the authorized user
+    for (const id of ids) {
+      const ref = db.collection('transactions').doc(id)
+      const doc = await ref.get()
+      if (doc.exists && doc.data().userId === user.id) {
+        batch.delete(ref)
+        count++
+      }
+    }
+
+    if (count > 0) {
+      await batch.commit()
+    }
+
+    return NextResponse.json({ deleted: count })
   } catch (error) {
     console.error('[DELETE /api/transactions]', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

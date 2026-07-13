@@ -12,7 +12,8 @@ import { ConfirmDialog } from '@/components/ui/Modal'
 import { toast } from '@/components/ui/Toaster'
 import { profileSchema } from '@/lib/validations'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { signOut } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
 import { cn } from '@/lib/utils'
 
 const TABS = [
@@ -65,8 +66,7 @@ export default function SettingsPage() {
     setDeleting(true)
     try {
       await axios.delete('/api/user')
-      const supabase = createClient()
-      await supabase.auth.signOut()
+      await signOut(auth)
       router.push('/')
       toast.success('Account deleted')
     } catch {

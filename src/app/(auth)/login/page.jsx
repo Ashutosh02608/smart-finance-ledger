@@ -7,7 +7,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { motion } from 'framer-motion'
-import { createClient } from '@/lib/supabase/client'
+import { signInWithEmailAndPassword } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { toast } from '@/components/ui/Toaster'
@@ -31,19 +32,23 @@ function LoginForm() {
 
   const onSubmit = async ({ email, password }) => {
     setLoading(true)
-    const supabase = createClient()
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password })
-      if (error) throw error
+      await signInWithEmailAndPassword(auth, email, password)
       toast.success('Welcome back!')
       router.push(redirect)
       router.refresh()
     } catch (e) {
-      toast.error(e.message || 'Login failed')
+      // Clean Firebase auth error messages
+      let msg = e.message || 'Login failed'
+      if (e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password' || e.code === 'auth/user-not-found') {
+        msg = 'Invalid email or password'
+      }
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
   }
+
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>

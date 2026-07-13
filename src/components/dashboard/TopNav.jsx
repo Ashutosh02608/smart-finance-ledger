@@ -6,7 +6,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Search, Bell, Sun, Moon, Menu, LogOut, Settings, User, X } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
+import { signOut } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
 import { cn, formatRelativeTime } from '@/lib/utils'
 import { toast } from '@/components/ui/Toaster'
 
@@ -55,10 +56,13 @@ export function TopNav({ user, unreadCount = 0, notifications = [], onMenuClick,
   }
 
   const handleLogout = async () => {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/login')
-    toast.success('Signed out successfully')
+    try {
+      await signOut(auth)
+      router.push('/login')
+      toast.success('Signed out successfully')
+    } catch (e) {
+      toast.error('Failed to sign out')
+    }
   }
 
   const isDark = theme === 'dark'

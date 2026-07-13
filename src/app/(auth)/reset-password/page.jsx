@@ -6,7 +6,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { motion } from 'framer-motion'
-import { createClient } from '@/lib/supabase/client'
+import { sendPasswordResetEmail } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { toast } from '@/components/ui/Toaster'
@@ -26,12 +27,8 @@ export default function ResetPasswordPage() {
 
   const onSubmit = async ({ email }) => {
     setLoading(true)
-    const supabase = createClient()
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/update-password`,
-      })
-      if (error) throw error
+      await sendPasswordResetEmail(auth, email)
       setSent(true)
     } catch (e) {
       toast.error(e.message || 'Failed to send reset email')
@@ -39,6 +36,7 @@ export default function ResetPasswordPage() {
       setLoading(false)
     }
   }
+
 
   if (sent) {
     return (

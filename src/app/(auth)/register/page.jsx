@@ -7,7 +7,8 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { motion } from 'framer-motion'
-import { createClient } from '@/lib/supabase/client'
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth'
+import { auth } from '@/lib/firebase/client'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { toast } from '@/components/ui/Toaster'
@@ -31,32 +32,32 @@ export default function RegisterPage() {
 
   const onSubmit = async ({ email, password, name }) => {
     setLoading(true)
-    const supabase = createClient()
     try {
-      const { data, error } = await supabase.auth.signUp({
+      const { user } = await createUserWithEmailAndPassword(auth, email, password)
+      
+      // Update display name in Firebase Auth
+      await updateProfile(user, { displayName: name })
+
+      // Seed our DB user record, default categories, and send welcome email
+      await axios.post('/api/auth/register', {
+        userId: user.uid,
         email,
-        password,
-        options: { data: { name } },
+        name,
       })
 
-      if (error) throw error
-
-      if (data.user) {
-        // Seed our DB user record, default categories, and send welcome email
-        await axios.post('/api/auth/register', {
-          userId: data.user.id,
-          email,
-          name,
-        })
-        toast.success('Account created!', { description: 'Check your email to verify your account.' })
-        router.push('/dashboard')
-      }
+      toast.success('Account created!', { description: 'Welcome to Smart Finance Ledger!' })
+      router.push('/dashboard')
     } catch (e) {
-      toast.error(e.message || 'Registration failed')
+      let msg = e.message || 'Registration failed'
+      if (e.code === 'auth/email-already-in-use') {
+        msg = 'This email is already registered.'
+      }
+      toast.error(msg)
     } finally {
       setLoading(false)
     }
   }
+
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>

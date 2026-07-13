@@ -1,21 +1,20 @@
 export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import prisma from '@/lib/prisma'
+import { getSessionUser } from '@/lib/firebase/server-auth'
+import { db } from '@/lib/firebase/admin'
 import { budgetSchema } from '@/lib/validations'
 import { startOfMonth, endOfMonth } from 'date-fns'
 
 // ─── GET /api/budgets ─────────────────────────────────────────────────────────
 export async function GET(request) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
     const month = searchParams.get('month') // e.g., "2024-01"
-    
+
     let monthStart, monthEnd
     if (month) {
       const [year, m] = month.split('-').map(Number)
@@ -26,35 +25,43 @@ export async function GET(request) {
       monthEnd = endOfMonth(new Date())
     }
 
-    const budgets = await prisma.budget.findMany({
-      where: {
-        userId: user.id,
-        month: { gte: monthStart, lte: monthEnd },
-      },
+    // Query budgets for this month
+    const budgetsSnapshot = await db.collection('budgets')
+      .where('userId', '==', user.id)
+      .where('month', '>=', monthStart)
+      .where('month', '<=', monthEnd)
+      .get()
+
+    // Query transactions for expense aggregation
+    const txSnapshot = await db.collection('transactions')
+      .where('userId', '==', user.id)
+      .where('type', '==', 'EXPENSE')
+      .where('date', '>=', monthStart)
+      .where('date', '<=', monthEnd)
+      .get()
+
+    // Sum expenses by category in memory
+    const spentMap = {}
+    txSnapshot.docs.forEach(doc => {
+      const data = doc.data()
+      spentMap[data.category] = (spentMap[data.category] || 0) + (data.amount || 0)
     })
 
-    // Enrich with current spending per category
-    const enriched = await Promise.all(
-      budgets.map(async (budget) => {
-        const spent = await prisma.transaction.aggregate({
-          where: {
-            userId: user.id,
-            type: 'EXPENSE',
-            category: budget.category,
-            date: { gte: monthStart, lte: monthEnd },
-          },
-          _sum: { amount: true },
-        })
-        const spentAmount = spent._sum.amount || 0
-        return {
-          ...budget,
-          spent: spentAmount,
-          remaining: budget.limit - spentAmount,
-          percentage: Math.min(100, Math.round((spentAmount / budget.limit) * 100)),
-          isExceeded: spentAmount > budget.limit,
-        }
-      })
-    )
+    // Enrich budgets with spent data
+    const enriched = budgetsSnapshot.docs.map(doc => {
+      const data = doc.data()
+      const spentAmount = spentMap[data.category] || 0
+      return {
+        id: doc.id,
+        category: data.category,
+        limit: data.limit,
+        month: data.month ? data.month.toDate().toISOString() : null,
+        spent: spentAmount,
+        remaining: data.limit - spentAmount,
+        percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
+        isExceeded: spentAmount > data.limit,
+      }
+    })
 
     return NextResponse.json({ budgets: enriched })
   } catch (error) {
@@ -66,8 +73,7 @@ export async function GET(request) {
 // ─── POST /api/budgets ─────────────────────────────────────────────────────────
 export async function POST(request) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
@@ -84,23 +90,25 @@ export async function POST(request) {
     }
 
     const monthDate = startOfMonth(new Date(parsed.data.month))
+    // Deterministic document ID to prevent duplicate categories per month
+    const docId = `${user.id}_${parsed.data.category}_${monthDate.toISOString().slice(0, 7)}`
 
-    const budget = await prisma.budget.upsert({
-      where: {
-        userId_category_month: {
-          userId: user.id,
-          category: parsed.data.category,
-          month: monthDate,
-        },
-      },
-      update: { limit: parsed.data.limit },
-      create: {
-        userId: user.id,
-        category: parsed.data.category,
-        limit: parsed.data.limit,
-        month: monthDate,
-      },
-    })
+    const budgetRef = db.collection('budgets').doc(docId)
+
+    await budgetRef.set({
+      userId: user.id,
+      category: parsed.data.category,
+      limit: parsed.data.limit,
+      month: monthDate,
+      updatedAt: new Date(),
+    }, { merge: true })
+
+    const doc = await budgetRef.get()
+    const budget = {
+      id: doc.id,
+      ...doc.data(),
+      month: doc.data().month.toDate().toISOString(),
+    }
 
     return NextResponse.json({ budget }, { status: 201 })
   } catch (error) {

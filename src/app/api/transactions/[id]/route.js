@@ -1,24 +1,35 @@
 export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import prisma from '@/lib/prisma'
+import { getSessionUser } from '@/lib/firebase/server-auth'
+import { db } from '@/lib/firebase/admin'
 import { transactionSchema } from '@/lib/validations'
 
 // ─── GET /api/transactions/[id] ────────────────────────────────────────────────
 export async function GET(request, { params }) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const transaction = await prisma.transaction.findFirst({
-      where: { id: params.id, userId: user.id },
-    })
+    const docRef = db.collection('transactions').doc(params.id)
+    const doc = await docRef.get()
 
-    if (!transaction) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    if (!doc.exists || doc.data().userId !== user.id) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+
+    const data = doc.data()
+    const transaction = {
+      id: doc.id,
+      ...data,
+      date: data.date ? data.date.toDate().toISOString() : null,
+      createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+      updatedAt: data.updatedAt ? data.updatedAt.toDate().toISOString() : null,
+    }
+
     return NextResponse.json({ transaction })
   } catch (error) {
+    console.error('[GET /api/transactions/[id]]', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -26,14 +37,15 @@ export async function GET(request, { params }) {
 // ─── PUT /api/transactions/[id] ────────────────────────────────────────────────
 export async function PUT(request, { params }) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const existing = await prisma.transaction.findFirst({
-      where: { id: params.id, userId: user.id },
-    })
-    if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    const docRef = db.collection('transactions').doc(params.id)
+    const doc = await docRef.get()
+
+    if (!doc.exists || doc.data().userId !== user.id) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
 
     const body = await request.json()
     const parsed = transactionSchema.partial().safeParse({
@@ -48,17 +60,27 @@ export async function PUT(request, { params }) {
       )
     }
 
-    const transaction = await prisma.transaction.update({
-      where: { id: params.id },
-      data: {
-        ...parsed.data,
-        ...(parsed.data.date && { date: new Date(parsed.data.date) }),
-        updatedAt: new Date(),
-      },
-    })
+    const updateData = {
+      ...parsed.data,
+      ...(parsed.data.date && { date: new Date(parsed.data.date) }),
+      updatedAt: new Date(),
+    }
+
+    await docRef.update(updateData)
+
+    const updatedDoc = await docRef.get()
+    const data = updatedDoc.data()
+    const transaction = {
+      id: updatedDoc.id,
+      ...data,
+      date: data.date ? data.date.toDate().toISOString() : null,
+      createdAt: data.createdAt ? data.createdAt.toDate().toISOString() : null,
+      updatedAt: data.updatedAt ? data.updatedAt.toDate().toISOString() : null,
+    }
 
     return NextResponse.json({ transaction })
   } catch (error) {
+    console.error('[PUT /api/transactions/[id]]', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
@@ -66,18 +88,21 @@ export async function PUT(request, { params }) {
 // ─── DELETE /api/transactions/[id] ────────────────────────────────────────────
 export async function DELETE(request, { params }) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-    const existing = await prisma.transaction.findFirst({
-      where: { id: params.id, userId: user.id },
-    })
-    if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    const docRef = db.collection('transactions').doc(params.id)
+    const doc = await docRef.get()
 
-    await prisma.transaction.delete({ where: { id: params.id } })
+    if (!doc.exists || doc.data().userId !== user.id) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+
+    await docRef.delete()
+
     return NextResponse.json({ success: true })
   } catch (error) {
+    console.error('[DELETE /api/transactions/[id]]', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

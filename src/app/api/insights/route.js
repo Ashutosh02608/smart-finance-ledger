@@ -1,80 +1,96 @@
 export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
-import prisma from '@/lib/prisma'
+import { getSessionUser } from '@/lib/firebase/server-auth'
+import { db } from '@/lib/firebase/admin'
 import { calculateHealthScore } from '@/lib/health-score'
 import { calculatePredictions, generateInsights } from '@/lib/predictions'
-import { startOfMonth, endOfMonth, subMonths, format } from 'date-fns'
+import { startOfMonth, endOfMonth, subMonths, isWithinInterval } from 'date-fns'
 
 export async function GET(request) {
   try {
-    const supabase = await createClient()
-    const { data: { user } } = await supabase.auth.getUser()
+    const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const now = new Date()
     const monthStart = startOfMonth(now)
     const monthEnd = endOfMonth(now)
 
-    // Current month totals
-    const [incomeAgg, expenseAgg, budgets] = await Promise.all([
-      prisma.transaction.aggregate({
-        where: { userId: user.id, type: 'INCOME', date: { gte: monthStart, lte: monthEnd } },
-        _sum: { amount: true },
-      }),
-      prisma.transaction.aggregate({
-        where: { userId: user.id, type: 'EXPENSE', date: { gte: monthStart, lte: monthEnd } },
-        _sum: { amount: true },
-      }),
-      prisma.budget.findMany({
-        where: { userId: user.id, month: { gte: monthStart, lte: monthEnd } },
-      }),
+    // Parallel fetch: all user transactions and this month's budgets
+    const [txsSnapshot, budgetsSnapshot] = await Promise.all([
+      db.collection('transactions').where('userId', '==', user.id).get(),
+      db.collection('budgets')
+        .where('userId', '==', user.id)
+        .where('month', '>=', monthStart)
+        .where('month', '<=', monthEnd)
+        .get(),
     ])
 
-    const monthIncome = incomeAgg._sum.amount || 0
-    const monthExpense = expenseAgg._sum.amount || 0
+    const allTransactions = txsSnapshot.docs.map(doc => {
+      const data = doc.data()
+      return {
+        id: doc.id,
+        ...data,
+        date: data.date ? data.date.toDate() : null,
+      }
+    }).filter(tx => tx.date !== null)
 
-    // Enrich budgets with spending
-    const budgetsWithSpent = await Promise.all(
-      budgets.map(async (b) => {
-        const spent = await prisma.transaction.aggregate({
-          where: {
-            userId: user.id, type: 'EXPENSE', category: b.category,
-            date: { gte: monthStart, lte: monthEnd },
-          },
-          _sum: { amount: true },
-        })
-        return { ...b, spent: spent._sum.amount || 0 }
-      })
-    )
+    // Current month stats
+    let monthIncome = 0
+    let monthExpense = 0
+    const currentCategoryMap = {}
+
+    allTransactions.forEach(tx => {
+      if (isWithinInterval(tx.date, { start: monthStart, end: monthEnd })) {
+        if (tx.type === 'INCOME') {
+          monthIncome += tx.amount || 0
+        } else if (tx.type === 'EXPENSE') {
+          monthExpense += tx.amount || 0
+          currentCategoryMap[tx.category] = (currentCategoryMap[tx.category] || 0) + (tx.amount || 0)
+        }
+      }
+    })
+
+    // Enrich budgets with in-memory spent info
+    const budgetsWithSpent = budgetsSnapshot.docs.map(doc => {
+      const data = doc.data()
+      const spent = currentCategoryMap[data.category] || 0
+      return {
+        id: doc.id,
+        category: data.category,
+        limit: data.limit,
+        month: data.month ? data.month.toDate().toISOString() : null,
+        spent,
+      }
+    })
 
     // All-time net savings
-    const [allTimeIncome, allTimeExpense] = await Promise.all([
-      prisma.transaction.aggregate({ where: { userId: user.id, type: 'INCOME' }, _sum: { amount: true } }),
-      prisma.transaction.aggregate({ where: { userId: user.id, type: 'EXPENSE' }, _sum: { amount: true } }),
-    ])
-    const totalNetSavings = (allTimeIncome._sum.amount || 0) - (allTimeExpense._sum.amount || 0)
-
-    // Average monthly expense over last 6 months
-    const sixMonthsAgo = subMonths(monthStart, 6)
-    const historicExpense = await prisma.transaction.aggregate({
-      where: { userId: user.id, type: 'EXPENSE', date: { gte: sixMonthsAgo, lte: monthStart } },
-      _sum: { amount: true },
+    let allTimeIncome = 0
+    let allTimeExpense = 0
+    allTransactions.forEach(tx => {
+      if (tx.type === 'INCOME') allTimeIncome += tx.amount || 0
+      if (tx.type === 'EXPENSE') allTimeExpense += tx.amount || 0
     })
-    const avgMonthlyExpense = (historicExpense._sum.amount || 0) / 6
+    const totalNetSavings = allTimeIncome - allTimeExpense
+
+    // Average monthly expense over the last 6 months
+    const sixMonthsAgo = subMonths(monthStart, 6)
+    let historicExpenseTotal = 0
+    allTransactions.forEach(tx => {
+      if (tx.type === 'EXPENSE' && isWithinInterval(tx.date, { start: sixMonthsAgo, end: monthStart })) {
+        historicExpenseTotal += tx.amount || 0
+      }
+    })
+    const avgMonthlyExpense = historicExpenseTotal / 6
 
     // Income consistency over last 3 months
-    const last3MonthsHadIncome = await Promise.all(
-      [1, 2, 3].map(async (offset) => {
-        const mStart = startOfMonth(subMonths(now, offset))
-        const mEnd = endOfMonth(subMonths(now, offset))
-        const count = await prisma.transaction.count({
-          where: { userId: user.id, type: 'INCOME', date: { gte: mStart, lte: mEnd } },
-        })
-        return count > 0
-      })
-    )
+    const last3MonthsHadIncome = [1, 2, 3].map(offset => {
+      const mStart = startOfMonth(subMonths(now, offset))
+      const mEnd = endOfMonth(subMonths(now, offset))
+      return allTransactions.some(tx => 
+        tx.type === 'INCOME' && isWithinInterval(tx.date, { start: mStart, end: mEnd })
+      )
+    })
 
     // Health score
     const healthScore = calculateHealthScore({
@@ -93,23 +109,23 @@ export async function GET(request) {
       budgets: budgetsWithSpent,
     })
 
-    // Category breakdown for insights
-    const currentByCategory = await prisma.transaction.groupBy({
-      by: ['category'],
-      where: { userId: user.id, type: 'EXPENSE', date: { gte: monthStart, lte: monthEnd } },
-      _sum: { amount: true },
-    })
+    // Last month category breakdown for MoM insights
     const lastMonthStart = startOfMonth(subMonths(now, 1))
     const lastMonthEnd = endOfMonth(subMonths(now, 1))
-    const lastByCategory = await prisma.transaction.groupBy({
-      by: ['category'],
-      where: { userId: user.id, type: 'EXPENSE', date: { gte: lastMonthStart, lte: lastMonthEnd } },
-      _sum: { amount: true },
+    const lastCategoryMap = {}
+
+    allTransactions.forEach(tx => {
+      if (tx.type === 'EXPENSE' && isWithinInterval(tx.date, { start: lastMonthStart, end: lastMonthEnd })) {
+        lastCategoryMap[tx.category] = (lastCategoryMap[tx.category] || 0) + (tx.amount || 0)
+      }
     })
 
+    const currentByCategory = Object.entries(currentCategoryMap).map(([category, total]) => ({ category, total }))
+    const lastMonthByCategory = Object.entries(lastCategoryMap).map(([category, total]) => ({ category, total }))
+
     const insights = generateInsights({
-      currentMonthByCategory: currentByCategory.map(c => ({ category: c.category, total: c._sum.amount || 0 })),
-      lastMonthByCategory: lastByCategory.map(c => ({ category: c.category, total: c._sum.amount || 0 })),
+      currentMonthByCategory,
+      lastMonthByCategory,
       dailyBurnRate: predictions.dailyBurnRate,
       totalIncome: monthIncome,
       totalExpense: monthExpense,
