@@ -16,9 +16,25 @@ import { Eye, EyeOff, Mail, Lock } from 'lucide-react'
 import axios from 'axios'
 
 const schema = z.object({
-  email: z.string().email('Invalid email address'),
-  password: z.string().min(6, 'Password must be at least 6 characters'),
-  name: z.string().min(2, 'Name must be at least 2 characters'),
+  name: z.string()
+    .min(2, 'Name must be at least 2 characters')
+    .max(50, 'Name cannot exceed 50 characters')
+    .regex(/^[a-zA-Z\s]+$/, 'Name can only contain alphabets and spaces'),
+  email: z.string()
+    .min(1, 'Email is required')
+    .email('Invalid email address')
+    .transform(val => val.trim().toLowerCase()),
+  password: z.string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(50, 'Password cannot exceed 50 characters')
+    .regex(/[A-Z]/, 'Password must contain at least one uppercase letter')
+    .regex(/[a-z]/, 'Password must contain at least one lowercase letter')
+    .regex(/[0-9]/, 'Password must contain at least one number')
+    .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character'),
+  confirmPassword: z.string().min(1, 'Confirm password is required'),
+}).refine(data => data.password === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
 })
 
 export default function RegisterPage() {
@@ -87,7 +103,7 @@ export default function RegisterPage() {
         <Input
           label="Password"
           type={showPass ? 'text' : 'password'}
-          placeholder="At least 6 characters"
+          placeholder="Min 8 characters (mixed case, number, symbol)"
           leftIcon={<Lock className="w-3.5 h-3.5" />}
           rightIcon={
             <button type="button" onClick={() => setShowPass(!showPass)} className="text-[var(--text-muted)] hover:text-[var(--text-primary)]">
@@ -96,6 +112,14 @@ export default function RegisterPage() {
           }
           error={errors.password?.message}
           {...register('password')}
+        />
+        <Input
+          label="Confirm Password"
+          type={showPass ? 'text' : 'password'}
+          placeholder="Confirm your password"
+          leftIcon={<Lock className="w-3.5 h-3.5" />}
+          error={errors.confirmPassword?.message}
+          {...register('confirmPassword')}
         />
         <Button type="submit" isLoading={loading} className="w-full">
           Create Account

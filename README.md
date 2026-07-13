@@ -98,7 +98,7 @@ src/
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/smart-finance-ledger.git
+git clone https://github.com/Ashutosh02608/smart-finance-ledger.git
 cd smart-finance-ledger
 
 # Install dependencies
