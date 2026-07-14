@@ -2,18 +2,20 @@ export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
-import { db } from '@/lib/firebase/admin'
+import { db } from '@/lib/db'
+import { budgets, transactions } from '@/lib/db/schema'
+import { eq } from 'drizzle-orm'
 import { budgetSchema } from '@/lib/validations'
 import { startOfMonth, endOfMonth } from 'date-fns'
+import { nanoid } from 'nanoid'
 
-// ─── GET /api/budgets ─────────────────────────────────────────────────────────
 export async function GET(request) {
   try {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { searchParams } = new URL(request.url)
-    const month = searchParams.get('month') // e.g., "2024-01"
+    const month = searchParams.get('month')
 
     let monthStart, monthEnd
     if (month) {
@@ -25,97 +27,61 @@ export async function GET(request) {
       monthEnd = endOfMonth(new Date())
     }
 
-    // Query budgets (filtering by month in-memory later)
-    const budgetsSnapshot = await db.collection('budgets')
-      .where('userId', '==', user.id)
-      .get()
+    const [budgetRows, txRows] = await Promise.all([
+      db.select().from(budgets).where(eq(budgets.userId, user.id)),
+      db.select().from(transactions).where(eq(transactions.userId, user.id)),
+    ])
 
-    // Query all transactions for user (requires no compound indexes)
-    const txSnapshot = await db.collection('transactions')
-      .where('userId', '==', user.id)
-      .get()
-
-    // Sum expenses by category in memory
     const spentMap = {}
-    txSnapshot.docs.forEach(doc => {
-      const data = doc.data()
-      const txDate = data.date ? data.date.toDate() : null
-      if (data.type === 'EXPENSE' && txDate && txDate >= monthStart && txDate <= monthEnd) {
-        spentMap[data.category] = (spentMap[data.category] || 0) + (data.amount || 0)
+    txRows.forEach(tx => {
+      const txDate = new Date(tx.date)
+      if (tx.type === 'EXPENSE' && txDate >= monthStart && txDate <= monthEnd) {
+        spentMap[tx.category] = (spentMap[tx.category] || 0) + parseFloat(tx.amount)
       }
     })
 
-    // Enrich budgets with spent data
-    const enriched = budgetsSnapshot.docs
-      .filter(doc => {
-        const mVal = doc.data().month ? doc.data().month.toDate() : null
-        return mVal && mVal >= monthStart && mVal <= monthEnd
-      })
-      .map(doc => {
-        const data = doc.data()
-        const spentAmount = spentMap[data.category] || 0
-        return {
-          id: doc.id,
-          category: data.category,
-          limit: data.limit,
-          month: data.month ? data.month.toDate().toISOString() : null,
-          spent: spentAmount,
-          remaining: data.limit - spentAmount,
-          percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
-          isExceeded: spentAmount > data.limit,
-        }
+    const enriched = budgetRows
+      .filter(b => { const m = new Date(b.month); return m >= monthStart && m <= monthEnd })
+      .map(b => {
+        const spent = spentMap[b.category] || 0
+        const limit = parseFloat(b.limit)
+        return { id: b.id, category: b.category, limit, month: new Date(b.month).toISOString(), spent, remaining: limit - spent, percentage: Math.min(100, Math.round((spent / limit) * 100)), isExceeded: spent > limit }
       })
 
     return NextResponse.json({ budgets: enriched })
   } catch (error) {
     console.error('[GET /api/budgets]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }
 
-// ─── POST /api/budgets ─────────────────────────────────────────────────────────
 export async function POST(request) {
   try {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
-    const parsed = budgetSchema.safeParse({
-      ...body,
-      limit: Number(body.limit),
-    })
-
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: 'Validation failed', issues: parsed.error.issues },
-        { status: 422 }
-      )
-    }
+    const parsed = budgetSchema.safeParse({ ...body, limit: Number(body.limit) })
+    if (!parsed.success) return NextResponse.json({ error: 'Validation failed', issues: parsed.error.issues }, { status: 422 })
 
     const monthDate = startOfMonth(new Date(parsed.data.month))
-    // Deterministic document ID to prevent duplicate categories per month
     const docId = `${user.id}_${parsed.data.category}_${monthDate.toISOString().slice(0, 7)}`
 
-    const budgetRef = db.collection('budgets').doc(docId)
-
-    await budgetRef.set({
+    // Upsert using onConflictDoUpdate
+    const [budget] = await db.insert(budgets).values({
+      id: docId,
       userId: user.id,
       category: parsed.data.category,
       limit: parsed.data.limit,
       month: monthDate,
-      updatedAt: new Date(),
-    }, { merge: true })
+    }).onConflictDoUpdate({
+      target: budgets.id,
+      set: { limit: parsed.data.limit, updatedAt: new Date() },
+    }).returning()
 
-    const doc = await budgetRef.get()
-    const budget = {
-      id: doc.id,
-      ...doc.data(),
-      month: doc.data().month.toDate().toISOString(),
-    }
-
-    return NextResponse.json({ budget }, { status: 201 })
+    return NextResponse.json({ budget: { ...budget, limit: parseFloat(budget.limit), month: new Date(budget.month).toISOString() } }, { status: 201 })
   } catch (error) {
     console.error('[POST /api/budgets]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }

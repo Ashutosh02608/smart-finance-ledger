@@ -2,11 +2,13 @@ export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
-import { db } from '@/lib/firebase/admin'
+import { db } from '@/lib/db'
+import { transactions, budgets, notifications, users } from '@/lib/db/schema'
+import { eq } from 'drizzle-orm'
 import { transactionSchema } from '@/lib/validations'
 import { sendBudgetExceededEmail, sendLargeExpenseEmail } from '@/lib/resend'
 import { startOfMonth, endOfMonth } from 'date-fns'
-import { parseFirestoreDate } from '@/lib/utils'
+import { nanoid } from 'nanoid'
 
 // ─── GET /api/transactions ─────────────────────────────────────────────────────
 export async function GET(request) {
@@ -24,89 +26,40 @@ export async function GET(request) {
     const endDate = searchParams.get('endDate')
     const sortBy = searchParams.get('sortBy') || 'date'
     const sortDir = searchParams.get('sortDir') || 'desc'
-    const minAmount = parseFloat(searchParams.get('minAmount') || '0')
-    const maxAmount = parseFloat(searchParams.get('maxAmount') || '0')
 
-    // Fetch all user transactions to filter in-memory (eliminating strict Firestore index constraints)
-    const snapshot = await db.collection('transactions').where('userId', '==', user.id).get()
+    let list = await db.select().from(transactions).where(eq(transactions.userId, user.id))
 
-    let list = snapshot.docs.map(doc => {
-      const data = doc.data()
-      return {
-        id: doc.id,
-        ...data,
-        date: parseFirestoreDate(data.date)?.toISOString() || null,
-        createdAt: parseFirestoreDate(data.createdAt)?.toISOString() || null,
-        updatedAt: parseFirestoreDate(data.updatedAt)?.toISOString() || null,
-      }
-    })
+    list = list.map(tx => ({ ...tx, amount: parseFloat(tx.amount), date: new Date(tx.date) }))
 
-    // Apply in-memory filters
-    if (type) {
-      list = list.filter(t => t.type === type)
-    }
-    if (category) {
-      list = list.filter(t => t.category === category)
-    }
+    if (type) list = list.filter(t => t.type === type)
+    if (category) list = list.filter(t => t.category === category)
     if (search) {
       const sq = search.toLowerCase()
-      list = list.filter(t => 
-        (t.title && t.title.toLowerCase().includes(sq)) || 
-        (t.notes && t.notes.toLowerCase().includes(sq)) || 
+      list = list.filter(t =>
+        (t.title && t.title.toLowerCase().includes(sq)) ||
+        (t.notes && t.notes.toLowerCase().includes(sq)) ||
         (t.category && t.category.toLowerCase().includes(sq))
       )
     }
-    if (startDate) {
-      list = list.filter(t => new Date(t.date) >= new Date(startDate + 'T00:00:00'))
-    }
-    if (endDate) {
-      list = list.filter(t => new Date(t.date) <= new Date(endDate + 'T23:59:59'))
-    }
-    if (minAmount > 0) {
-      list = list.filter(t => t.amount >= minAmount)
-    }
-    if (maxAmount > 0) {
-      list = list.filter(t => t.amount <= maxAmount)
-    }
+    if (startDate) list = list.filter(t => t.date >= new Date(startDate + 'T00:00:00'))
+    if (endDate) list = list.filter(t => t.date <= new Date(endDate + 'T23:59:59'))
 
-    // Apply in-memory sorting
     list.sort((a, b) => {
-      let valA = a[sortBy]
-      let valB = b[sortBy]
-
-      if (sortBy === 'date') {
-        valA = a.date ? new Date(a.date).getTime() : 0
-        valB = b.date ? new Date(b.date).getTime() : 0
-      } else if (sortBy === 'amount') {
-        valA = Number(a.amount || 0)
-        valB = Number(b.amount || 0)
-      } else if (typeof valA === 'string') {
-        valA = valA.toLowerCase()
-        valB = valB.toLowerCase()
-      }
-
+      let valA = a[sortBy === 'date' ? 'date' : sortBy]
+      let valB = b[sortBy === 'date' ? 'date' : sortBy]
+      if (typeof valA === 'string') { valA = valA.toLowerCase(); valB = valB?.toLowerCase() }
       if (valA < valB) return sortDir === 'asc' ? -1 : 1
       if (valA > valB) return sortDir === 'asc' ? 1 : -1
       return 0
     })
 
     const total = list.length
-    const totalPages = Math.ceil(total / limit)
-    const paginated = list.slice((page - 1) * limit, page * limit)
+    const paginated = list.slice((page - 1) * limit, page * limit).map(tx => ({ ...tx, date: tx.date.toISOString() }))
 
-    return NextResponse.json({
-      transactions: paginated,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages,
-        hasMore: page * limit < total,
-      },
-    })
+    return NextResponse.json({ transactions: paginated, pagination: { page, limit, total, totalPages: Math.ceil(total / limit), hasMore: page * limit < total } })
   } catch (error) {
     console.error('[GET /api/transactions]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }
 
@@ -117,175 +70,85 @@ export async function POST(request) {
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const body = await request.json()
-    const parsed = transactionSchema.safeParse({
-      ...body,
-      amount: Number(body.amount),
-    })
+    const parsed = transactionSchema.safeParse({ ...body, amount: Number(body.amount) })
+    if (!parsed.success) return NextResponse.json({ error: 'Validation failed', issues: parsed.error.issues }, { status: 422 })
 
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: 'Validation failed', issues: parsed.error.issues },
-        { status: 422 }
-      )
-    }
-
+    const txId = nanoid()
     const txDate = new Date(parsed.data.date)
 
-    const docRef = await db.collection('transactions').add({
-      ...parsed.data,
+    const [tx] = await db.insert(transactions).values({
+      id: txId,
       userId: user.id,
+      title: parsed.data.title,
+      amount: parsed.data.amount,
+      type: parsed.data.type,
+      category: parsed.data.category,
       date: txDate,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    })
+      paymentMethod: parsed.data.paymentMethod || 'CASH',
+      notes: parsed.data.notes || null,
+    }).returning()
 
-    const doc = await docRef.get()
-    const transaction = {
-      id: doc.id,
-      ...doc.data(),
-      date: doc.data().date.toDate().toISOString(),
-    }
+    const transaction = { ...tx, amount: parseFloat(tx.amount), date: new Date(tx.date).toISOString() }
 
-    // Fire-and-forget: check budget exceeded + large expense alerts
+    // Fire-and-forget: budget alerts + notifications
     setImmediate(async () => {
       try {
-        const userDoc = await db.collection('users').doc(user.id).get()
-        if (!userDoc.exists) return
-        const dbUser = userDoc.data()
-
-        const batch = db.batch()
+        const userRows = await db.select().from(users).where(eq(users.id, user.id))
+        const dbUser = userRows[0]
+        if (!dbUser) return
 
         if (transaction.type === 'EXPENSE') {
-          // Large expense alert (> ₹10,000)
           if (dbUser.emailOnLargeExpense && transaction.amount >= 10000) {
-            await sendLargeExpenseEmail({
-              to: dbUser.email || user.email,
-              name: dbUser.name || 'there',
-              title: transaction.title,
-              amount: transaction.amount,
-              category: transaction.category,
-              currency: dbUser.currency || 'INR',
-            })
+            await sendLargeExpenseEmail({ to: dbUser.email, name: dbUser.name || 'there', title: transaction.title, amount: transaction.amount, category: transaction.category, currency: dbUser.currency || 'INR' })
           }
 
-          // Budget exceeded check
+          // Budget check
           const monthStart = startOfMonth(txDate)
           const monthEnd = endOfMonth(txDate)
+          const budgetRows = await db.select().from(budgets).where(eq(budgets.userId, user.id))
+          const matchingBudget = budgetRows.find(b => b.category === transaction.category && new Date(b.month) >= monthStart && new Date(b.month) <= monthEnd)
 
-          // Query matching budget
-          const budgetSnapshot = await db.collection('budgets')
-            .where('userId', '==', user.id)
-            .where('category', '==', transaction.category)
-            .where('month', '>=', monthStart)
-            .where('month', '<=', monthEnd)
-            .limit(1)
-            .get()
+          if (matchingBudget) {
+            const allTx = await db.select().from(transactions).where(eq(transactions.userId, user.id))
+            const totalSpent = allTx
+              .filter(t => t.type === 'EXPENSE' && t.category === transaction.category && new Date(t.date) >= monthStart && new Date(t.date) <= monthEnd)
+              .reduce((s, t) => s + parseFloat(t.amount), 0)
 
-          if (!budgetSnapshot.empty) {
-            const budgetDoc = budgetSnapshot.docs[0]
-            const budgetData = budgetDoc.data()
-
-            // Sum up expenses for category in date range
-            const txsSnapshot = await db.collection('transactions')
-              .where('userId', '==', user.id)
-              .where('type', '==', 'EXPENSE')
-              .where('category', '==', transaction.category)
-              .where('date', '>=', monthStart)
-              .where('date', '<=', monthEnd)
-              .get()
-
-            const totalSpent = txsSnapshot.docs.reduce((sum, doc) => sum + (doc.data().amount || 0), 0)
-
-            if (totalSpent > budgetData.limit && dbUser.emailOnBudgetExceeded) {
-              await sendBudgetExceededEmail({
-                to: dbUser.email || user.email,
-                name: dbUser.name || 'there',
-                category: transaction.category,
-                limit: budgetData.limit,
-                spent: totalSpent,
-                currency: dbUser.currency || 'INR',
-              })
-
-              // Create warning notification
-              const notifRef = db.collection('notifications').doc()
-              batch.set(notifRef, {
-                userId: user.id,
-                title: `Budget Exceeded: ${transaction.category}`,
-                message: `You have spent ₹${Math.round(totalSpent).toLocaleString()} against a budget of ₹${Math.round(budgetData.limit).toLocaleString()}.`,
-                type: 'WARNING',
-                read: false,
-                createdAt: new Date(),
-              })
+            if (totalSpent > parseFloat(matchingBudget.limit) && dbUser.emailOnBudgetExceeded) {
+              await sendBudgetExceededEmail({ to: dbUser.email, name: dbUser.name || 'there', category: transaction.category, limit: parseFloat(matchingBudget.limit), spent: totalSpent, currency: dbUser.currency || 'INR' })
+              await db.insert(notifications).values({ id: nanoid(), userId: user.id, title: `Budget Exceeded: ${transaction.category}`, message: `You spent ₹${Math.round(totalSpent).toLocaleString()} vs budget of ₹${Math.round(parseFloat(matchingBudget.limit)).toLocaleString()}.`, type: 'WARNING', read: false })
             }
           }
 
-          // Create standard expense notification
-          const notifRef = db.collection('notifications').doc()
-          batch.set(notifRef, {
-            userId: user.id,
-            title: 'Expense Added',
-            message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added to ${transaction.category}.`,
-            type: 'INFO',
-            read: false,
-            createdAt: new Date(),
-          })
+          await db.insert(notifications).values({ id: nanoid(), userId: user.id, title: 'Expense Added', message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added to ${transaction.category}.`, type: 'INFO', read: false })
         } else {
-          // Create success income notification
-          const notifRef = db.collection('notifications').doc()
-          batch.set(notifRef, {
-            userId: user.id,
-            title: 'Income Added',
-            message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added as ${transaction.category}.`,
-            type: 'SUCCESS',
-            read: false,
-            createdAt: new Date(),
-          })
+          await db.insert(notifications).values({ id: nanoid(), userId: user.id, title: 'Income Added', message: `${transaction.title} — ₹${transaction.amount.toLocaleString()} added as ${transaction.category}.`, type: 'SUCCESS', read: false })
         }
-
-        await batch.commit()
-      } catch (e) {
-        console.error('[POST /api/transactions] background task error:', e)
-      }
+      } catch (e) { console.error('[POST /api/transactions] bg error:', e) }
     })
 
     return NextResponse.json({ transaction }, { status: 201 })
   } catch (error) {
     console.error('[POST /api/transactions]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }
 
-// ─── DELETE /api/transactions (bulk delete) ────────────────────────────────────
+// ─── DELETE /api/transactions (bulk) ──────────────────────────────────────────
 export async function DELETE(request) {
   try {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { ids } = await request.json()
-    if (!Array.isArray(ids) || ids.length === 0) {
-      return NextResponse.json({ error: 'No IDs provided' }, { status: 400 })
-    }
+    if (!Array.isArray(ids) || ids.length === 0) return NextResponse.json({ error: 'No IDs provided' }, { status: 400 })
 
-    const batch = db.batch()
-    let count = 0
+    const { inArray, and } = await import('drizzle-orm')
+    const deleted = await db.delete(transactions).where(and(inArray(transactions.id, ids), eq(transactions.userId, user.id))).returning()
 
-    // Only delete documents belonging to the authorized user
-    for (const id of ids) {
-      const ref = db.collection('transactions').doc(id)
-      const doc = await ref.get()
-      if (doc.exists && doc.data().userId === user.id) {
-        batch.delete(ref)
-        count++
-      }
-    }
-
-    if (count > 0) {
-      await batch.commit()
-    }
-
-    return NextResponse.json({ deleted: count })
+    return NextResponse.json({ deleted: deleted.length })
   } catch (error) {
     console.error('[DELETE /api/transactions]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }

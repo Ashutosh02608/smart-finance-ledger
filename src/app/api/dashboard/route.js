@@ -2,12 +2,12 @@ export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
-import { db } from '@/lib/firebase/admin'
+import { db } from '@/lib/db'
+import { transactions, budgets, notifications, users } from '@/lib/db/schema'
+import { eq } from 'drizzle-orm'
 import { startOfMonth, endOfMonth } from 'date-fns'
 import { parseFirestoreDate } from '@/lib/utils'
 
-// ─── GET /api/dashboard ────────────────────────────────────────────────────────
-// Returns all data needed for dashboard in a single aggregated request
 export async function GET(request) {
   try {
     const user = await getSessionUser()
@@ -17,41 +17,24 @@ export async function GET(request) {
     const monthStart = startOfMonth(now)
     const monthEnd = endOfMonth(now)
 
-    // Fetch collections in parallel — single-field where() only to avoid composite index requirements
-    const [userDoc, txsSnapshot, budgetsSnapshot, notifsSnapshot] = await Promise.all([
-      db.collection('users').doc(user.id).get(),
-      db.collection('transactions').where('userId', '==', user.id).get(),
-      db.collection('budgets').where('userId', '==', user.id).get(),
-      db.collection('notifications').where('userId', '==', user.id).get(),
+    const [userRows, txRows, budgetRows, notifRows] = await Promise.all([
+      db.select().from(users).where(eq(users.id, user.id)),
+      db.select().from(transactions).where(eq(transactions.userId, user.id)),
+      db.select().from(budgets).where(eq(budgets.userId, user.id)),
+      db.select().from(notifications).where(eq(notifications.userId, user.id)),
     ])
 
-    if (!userDoc.exists) {
-      return NextResponse.json({ error: 'User profile not found' }, { status: 404 })
-    }
+    if (!userRows.length) return NextResponse.json({ error: 'User profile not found' }, { status: 404 })
 
-    const userData = { id: userDoc.id, ...userDoc.data() }
-    const unreadNotifications = notifsSnapshot.docs.filter(d => d.data().read === false).length
+    const userData = userRows[0]
+    const unreadNotifications = notifRows.filter(n => !n.read).length
 
-    // Parse all transactions safely
-    const allTransactions = txsSnapshot.docs.map(doc => {
-      const data = doc.data()
-      return {
-        id: doc.id,
-        ...data,
-        date: parseFirestoreDate(data.date),
-      }
-    })
+    let monthIncome = 0, monthExpense = 0, totalIncome = 0, totalExpense = 0
 
-    // Compute monthly and all-time stats in-memory
-    let monthIncome = 0
-    let monthExpense = 0
-    let totalIncome = 0
-    let totalExpense = 0
-
-    allTransactions.forEach(tx => {
-      const amount = tx.amount || 0
-      const isThisMonth = tx.date >= monthStart && tx.date <= monthEnd
-
+    txRows.forEach(tx => {
+      const amount = parseFloat(tx.amount) || 0
+      const txDate = new Date(tx.date)
+      const isThisMonth = txDate >= monthStart && txDate <= monthEnd
       if (tx.type === 'INCOME') {
         totalIncome += amount
         if (isThisMonth) monthIncome += amount
@@ -61,58 +44,42 @@ export async function GET(request) {
       }
     })
 
-    // Sort in-memory for recent transactions
-    const recentTransactions = [...allTransactions]
-      .sort((a, b) => b.date - a.date)
+    const recentTransactions = [...txRows]
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
       .slice(0, 5)
-      .map(tx => ({
-        ...tx,
-        date: tx.date ? tx.date.toISOString() : null,
-      }))
+      .map(tx => ({ ...tx, amount: parseFloat(tx.amount), date: new Date(tx.date).toISOString() }))
 
-    // Sum expenses by category this month
     const spentMap = {}
-    allTransactions.forEach(tx => {
-      if (tx.type === 'EXPENSE' && tx.date >= monthStart && tx.date <= monthEnd) {
-        spentMap[tx.category] = (spentMap[tx.category] || 0) + tx.amount
+    txRows.forEach(tx => {
+      const txDate = new Date(tx.date)
+      if (tx.type === 'EXPENSE' && txDate >= monthStart && txDate <= monthEnd) {
+        spentMap[tx.category] = (spentMap[tx.category] || 0) + parseFloat(tx.amount)
       }
     })
 
-    // Enrich budgets safely
-    const enrichedBudgets = budgetsSnapshot.docs
-      .filter(doc => {
-        const mVal = parseFirestoreDate(doc.data().month)
-        return mVal && mVal >= monthStart && mVal <= monthEnd
-      })
-      .map(doc => {
-        const data = doc.data()
-        const spentAmount = spentMap[data.category] || 0
+    const enrichedBudgets = budgetRows
+      .filter(b => { const m = new Date(b.month); return m >= monthStart && m <= monthEnd })
+      .map(b => {
+        const spent = spentMap[b.category] || 0
+        const limit = parseFloat(b.limit)
         return {
-          id: doc.id,
-          category: data.category,
-          limit: data.limit,
-          month: parseFirestoreDate(data.month)?.toISOString() || null,
-          spent: spentAmount,
-          remaining: data.limit - spentAmount,
-          percentage: Math.min(100, Math.round((spentAmount / data.limit) * 100)),
-          isExceeded: spentAmount > data.limit,
+          id: b.id, category: b.category, limit,
+          month: new Date(b.month).toISOString(),
+          spent, remaining: limit - spent,
+          percentage: Math.min(100, Math.round((spent / limit) * 100)),
+          isExceeded: spent > limit,
         }
       })
 
     return NextResponse.json({
       user: userData,
-      stats: {
-        monthIncome,
-        monthExpense,
-        monthSavings: monthIncome - monthExpense,
-        totalBalance: totalIncome - totalExpense,
-      },
+      stats: { monthIncome, monthExpense, monthSavings: monthIncome - monthExpense, totalBalance: totalIncome - totalExpense },
       recentTransactions,
       budgets: enrichedBudgets,
       unreadNotifications,
     })
   } catch (error) {
     console.error('[GET /api/dashboard]', error)
-    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+    return NextResponse.json({ error: 'Internal server error', detail: error.message }, { status: 500 })
   }
 }

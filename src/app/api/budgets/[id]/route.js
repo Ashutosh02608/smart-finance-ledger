@@ -2,70 +2,40 @@ export const dynamic = 'force-dynamic'
 
 import { NextResponse } from 'next/server'
 import { getSessionUser } from '@/lib/firebase/server-auth'
-import { db } from '@/lib/firebase/admin'
+import { db } from '@/lib/db'
+import { budgets } from '@/lib/db/schema'
+import { eq, and } from 'drizzle-orm'
 import { budgetSchema } from '@/lib/validations'
 
-// ─── PUT /api/budgets/[id] ─────────────────────────────────────────────────────
 export async function PUT(request, { params }) {
   try {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await params
-    const docRef = db.collection('budgets').doc(id)
-    const doc = await docRef.get()
-
-    if (!doc.exists || doc.data().userId !== user.id) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
+    const existing = await db.select().from(budgets).where(and(eq(budgets.id, id), eq(budgets.userId, user.id)))
+    if (!existing.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     const body = await request.json()
-    const parsed = budgetSchema.partial().safeParse({
-      ...body,
-      limit: body.limit ? Number(body.limit) : undefined,
-    })
+    const parsed = budgetSchema.partial().safeParse({ ...body, limit: body.limit ? Number(body.limit) : undefined })
+    if (!parsed.success) return NextResponse.json({ error: 'Validation failed', issues: parsed.error.issues }, { status: 422 })
 
-    if (!parsed.success) {
-      return NextResponse.json({ error: 'Validation failed', issues: parsed.error.issues }, { status: 422 })
-    }
-
-    const updateData = {
-      ...parsed.data,
-      updatedAt: new Date(),
-    }
-
-    await docRef.update(updateData)
-
-    const updatedDoc = await docRef.get()
-    const data = updatedDoc.data()
-    const budget = {
-      id: updatedDoc.id,
-      ...data,
-      month: data.month ? data.month.toDate().toISOString() : null,
-    }
-
-    return NextResponse.json({ budget })
+    const [updated] = await db.update(budgets).set({ ...parsed.data, updatedAt: new Date() }).where(eq(budgets.id, id)).returning()
+    return NextResponse.json({ budget: { ...updated, limit: parseFloat(updated.limit), month: new Date(updated.month).toISOString() } })
   } catch (error) {
     console.error('[PUT /api/budgets/[id]]', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-// ─── DELETE /api/budgets/[id] ──────────────────────────────────────────────────
 export async function DELETE(request, { params }) {
   try {
     const user = await getSessionUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { id } = await params
-    const docRef = db.collection('budgets').doc(id)
-    const doc = await docRef.get()
-
-    if (!doc.exists || doc.data().userId !== user.id) {
-      return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-
-    await docRef.delete()
+    const deleted = await db.delete(budgets).where(and(eq(budgets.id, id), eq(budgets.userId, user.id))).returning()
+    if (!deleted.length) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     return NextResponse.json({ success: true })
   } catch (error) {
